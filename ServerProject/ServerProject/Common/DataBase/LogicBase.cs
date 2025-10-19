@@ -3,7 +3,7 @@
     /// <summary>
     /// 邏輯基類，提供數據庫連接工廠的支持
     /// </summary>
-    public class LogicBase
+    public class ServiceBase
     {
         /// <summary>
         /// 數據庫連接工廠，用於創建數據庫連接
@@ -14,7 +14,7 @@
         /// 數據服務基類構造函數
         /// </summary>
         /// <param name="connectionFactory">數據庫連接工廠</param>
-        public LogicBase(IConnectionFactory connectionFactory)
+        public ServiceBase(IConnectionFactory connectionFactory)
         {
             _connectionFactory = connectionFactory;
         }

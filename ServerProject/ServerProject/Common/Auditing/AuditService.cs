@@ -5,7 +5,7 @@ namespace ServerProject.Common
     /// <summary>
     /// 審計服務實現，提供審計記錄的寫入、查詢和簽名功能
     /// </summary>
-    public class AuditService : IAuditService
+    public class AuditRepository : IAuditRepository
     {
         /// <summary>
         /// 時鐘提供者，用於獲取當前時間
@@ -37,7 +37,7 @@ namespace ServerProject.Common
         /// 審計服務構造函數，接受一個時間提供者以獲取當前 UTC 時間
         /// </summary>
         /// <param name="clock">當前 UTC 時間</param>
-        public AuditService(ITimeProvider clock)
+        public AuditRepository(ITimeProvider clock)
         {
             _clock = clock;
         }

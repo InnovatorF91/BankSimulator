@@ -1,5 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using ServerProject.Logics;
+using ServerProject.Services;
 using ShareProject.Common;
 using ShareProject.Request;
 using ShareProject.Response;
@@ -16,16 +16,16 @@ namespace ServerProject.Controllers
         /// <summary>
         /// 客戶邏輯接口，用於處理客戶相關的業務邏輯
         /// </summary>
-        private readonly ICustomerLogic _customerLogic;
+        private readonly ICustomerService _customerService;
 
         /// <summary>
         /// 客戶控制器構造函數，注入客戶邏輯接口
         /// </summary>
-        /// <param name="customerLogic">客戶邏輯接口</param>
-        public CustomerController(ICustomerLogic customerLogic)
+        /// <param name="customerService">客戶邏輯接口</param>
+        public CustomerController(ICustomerService customerService)
         {
             // 注入客戶邏輯接口
-            _customerLogic = customerLogic;
+            _customerService = customerService;
         }
 
         /// <summary>
@@ -39,7 +39,7 @@ namespace ServerProject.Controllers
             // 執行客戶邏輯以獲取客戶信息
             var result = new CustomerResponse
             {
-                Customer = await _customerLogic.GetCustomerInfo(customerRequest.Customer.CustomerId),
+                Customer = await _customerService.GetCustomerInfo(customerRequest.Customer.CustomerId),
             };
 
             // 檢查是否成功獲取客戶信息
@@ -71,7 +71,7 @@ namespace ServerProject.Controllers
             // 執行客戶邏輯以列出所有客戶信息
             var result = new CustomerResponse
             {
-                Customers = await _customerLogic.ListAllCustomers(),
+                Customers = await _customerService.ListAllCustomers(),
             };
 
             // 檢查是否成功獲取客戶列表
@@ -100,7 +100,7 @@ namespace ServerProject.Controllers
         public async Task<CustomerResponse> InsertNewCustomer(CustomerRequest customerRequest)
         {
             // 執行客戶邏輯以註冊新客戶
-            var result = await _customerLogic.RegisterCustomer(customerRequest);
+            var result = await _customerService.RegisterCustomer(customerRequest);
             if (result)
             {
                 // 插入成功，返回成功回應
@@ -131,7 +131,7 @@ namespace ServerProject.Controllers
         public async Task<CustomerResponse> DeleteCustomer(CustomerRequest customerRequest)
         {
             // 執行客戶邏輯以刪除客戶
-            var result = await _customerLogic.RemoveCustomer(customerRequest);
+            var result = await _customerService.RemoveCustomer(customerRequest);
             if (result)
             {
                 // 刪除成功，設置成功狀態
@@ -162,7 +162,7 @@ namespace ServerProject.Controllers
         public async Task<CustomerResponse> UpdateCustomer(CustomerRequest customerRequest)
         {
             // 執行客戶邏輯以修改客戶信息
-            var result = await _customerLogic.ModifyCustomer(customerRequest);
+            var result = await _customerService.ModifyCustomer(customerRequest);
             if (result)
             {
                 // 更新成功，返回成功回應
@@ -194,7 +194,7 @@ namespace ServerProject.Controllers
 		{
 			// KYCStatusがnullの場合のデフォルト値を設定（例: Unreviewed）
 			var kycStatus = customerRequest.Customer.KYCStatus ?? KYCStatus.Unreviewed;
-			var result = await _customerLogic.UpdateKycStatus(customerRequest.Customer.CustomerId, kycStatus);
+			var result = await _customerService.UpdateKycStatus(customerRequest.Customer.CustomerId, kycStatus);
 			if (result)
 			{
 				// 更新成功，返回成功回應

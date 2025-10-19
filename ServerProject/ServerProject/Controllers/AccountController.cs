@@ -1,5 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using ServerProject.Logics;
+using ServerProject.Services;
 using ShareProject.Common;
 using ShareProject.Request;
 using ShareProject.Response;
@@ -13,15 +13,15 @@ namespace ServerProject.Controllers
 		/// <summary>
 		/// 帳戶邏輯接口，用於處理帳戶相關的業務邏輯
 		/// </summary>
-		private readonly IAccountLogic _accountLogic;
+		private readonly IAccountService _accountService;
 
 		/// <summary>
 		/// 帳戶控制器構造函數，注入帳戶邏輯接口
 		/// </summary>
-		/// <param name="accountLogic">帳戶邏輯</param>
-		public AccountController(IAccountLogic accountLogic)
+		/// <param name="accountService">帳戶邏輯</param>
+		public AccountController(IAccountService accountService)
 		{
-			_accountLogic = accountLogic;
+			_accountService = accountService;
 		}
 
 		/// <summary>
@@ -35,7 +35,7 @@ namespace ServerProject.Controllers
 			// 執行帳戶邏輯以獲取帳戶信息
 			var response = new AccountResponse
 			{
-				Account = await _accountLogic.GetAccount(accountRequest.AccountId)
+				Account = await _accountService.GetAccount(accountRequest.AccountId)
 			};
 
 			// 檢查是否成功獲取帳戶信息
@@ -66,7 +66,7 @@ namespace ServerProject.Controllers
 			{
 				Account = new AccountDto 
 				{
-					AccountId = await _accountLogic.OpenAccount(accountRequest)
+					AccountId = await _accountService.OpenAccount(accountRequest)
 				},
 			};
 
@@ -74,7 +74,7 @@ namespace ServerProject.Controllers
 			if (response.Account.AccountId != -1)
 			{
 				response.Message = "Account opened successfully.";
-				response.Account = await _accountLogic.GetAccount(response.Account.AccountId);
+				response.Account = await _accountService.GetAccount(response.Account.AccountId);
 			}
 			else
 			{
@@ -96,7 +96,7 @@ namespace ServerProject.Controllers
 			// 執行帳戶邏輯以關閉帳戶
 			var response = new CloseAccountResponse
 			{
-				Success = await _accountLogic.CloseAccount(accountRequest)
+				Success = await _accountService.CloseAccount(accountRequest)
 			};
 			// 根據操作結果設置回應訊息和帳戶資料
 			if (response.Success)
@@ -122,7 +122,7 @@ namespace ServerProject.Controllers
 			// 執行帳戶邏輯以更新帳戶信息
 			var response = new ModifyAccountResponse
 			{
-				Success = await _accountLogic.ModifyAccount(accountRequest)
+				Success = await _accountService.ModifyAccount(accountRequest)
 			};
 			// 根據操作結果設置回應訊息和帳戶資料
 			if (response.Success)
@@ -148,7 +148,7 @@ namespace ServerProject.Controllers
 			// 執行賬戶邏輯以得到賬戶餘額
 			var response = new AccountResponse()
 			{
-				Amount = await _accountLogic.GetBalance(accountRequest.AccountId)
+				Amount = await _accountService.GetBalance(accountRequest.AccountId)
 			};
 
 			// 如果賬戶餘額為空，則返回失敗的布爾值，否則返回成功的布爾值
@@ -178,7 +178,7 @@ namespace ServerProject.Controllers
 			// 執行賬戶邏輯以得到客戶所有賬戶
 			var response = new AccountResponse()
 			{
-				Accounts = await _accountLogic.GetAccounts(accountRequest.CustomerId)
+				Accounts = await _accountService.GetAccounts(accountRequest.CustomerId)
 			};
 
 			// 如果賬戶列表為空，則返回失敗的布爾值，否則返回成功的布爾值
@@ -208,7 +208,7 @@ namespace ServerProject.Controllers
 			// 執行賬戶邏輯以設定帳戶幣別
 			var response = new AccountResponse()
 			{
-				Success = await _accountLogic.SetCurrency(accountRequest.AccountId, accountRequest.Currency)
+				Success = await _accountService.SetCurrency(accountRequest.AccountId, accountRequest.Currency)
 			};
 
 			// 根據操作結果設置回應訊息

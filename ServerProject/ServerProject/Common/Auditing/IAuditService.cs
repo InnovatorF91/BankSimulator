@@ -3,7 +3,7 @@
     /// <summary>
     /// 審計服務接口，定義了審計記錄的寫入、查詢和簽名功能
     /// </summary>
-    public interface IAuditService
+    public interface IAuditRepository
     {
         /// <summary>
         /// 寫入審計條目到審計系統

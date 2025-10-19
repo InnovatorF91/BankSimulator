@@ -1,308 +1,479 @@
-﻿using Dapper;
-using ServerProject.Common;
+﻿using ServerProject.Common;
 using ServerProject.Models;
+using ServerProject.Repositories;
 using ShareProject.Common;
+using ShareProject.Request;
 
 namespace ServerProject.Services
 {
     /// <summary>
-    /// 客戶服務實現類
+    /// 客戶邏輯類，用於處理客戶相關的業務邏輯
     /// </summary>
-    public class CustomerService : ICustomerService
+    public class CustomerService : ServiceBase, ICustomerService
     {
         /// <summary>
-        /// 查詢語句：通過客戶ID獲取客戶信息
+        /// 客戶服務實例，用於處理客戶相關的數據操作
         /// </summary>
-        private readonly string queryGetCustomerById = "SELECT * FROM \"Customers\" WHERE customer_id = @Id AND is_deleted = false";
+        private readonly ICustomerRepository _customerRepository;
 
         /// <summary>
-        /// 插入語句：插入新的客戶信息
+        /// 客戶認證服務實例，用於處理客戶認證相關的數據操作
         /// </summary>
-        private readonly string queryInsertCustomer = "INSERT INTO \"Customers\" " +
-            "(name, gender,birth_date,id_type,id_number,address,phone,email,kyc_status,create_at) " +
-            "VALUES " +
-            "(@Name, @Gender,@BirthDate,@IdType,@IdNumber,@Address,@Phone,@Email,@KYCStatus,@CreateAt) " +
-            "RETURNING customer_id";
+        private readonly ICustomerAuthRepository _customerAuthRepository;
 
         /// <summary>
-        /// 更新語句：更新客戶信息
+        /// 時間提供者實例，用於獲取當前時間
         /// </summary>
-        private readonly string queryUpdateCustomer = "UPDATE \"Customers\" " +
-            "SET name = @Name, gender = @Gender, birth_date = @BirthDate , id_type = @IdType , id_number = @IdNumber , address = @Address , phone = @Phone ,email = @Email , kyc_status = @KYCStatus , update_at = @UpdateAt " +
-            "WHERE customer_id = @CustomerId AND is_deleted = false;";
+        private readonly ITimeProvider _timeProvider;
 
         /// <summary>
-        /// 刪除語句：刪除客戶信息
+        /// 客戶邏輯類構造函數
         /// </summary>
-        private readonly string queryDeleteCustomer = "UPDATE \"Customers\" " +
-            "SET  deleted_at = @DeletedAt, is_deleted = @IsDeleted, deleted_reason = @DeletedReason " +
-            "WHERE customer_id = @CustomerId AND is_deleted = false;";
-
-        /// <summary>
-        /// 查詢語句：通過客戶電話號碼獲取客戶信息
-        /// </summary>
-        private readonly string queryGetCustomerByPhone = "SELECT * FROM \"Customers\" WHERE phone = @Phone AND is_deleted = false;";
-
-        /// <summary>
-        /// 查詢語句：通過客戶電子郵件獲取客戶信息
-        /// </summary>
-        private readonly string queryGetCustomerByEmail = "SELECT * FROM \"Customers\" WHERE email = @Email AND is_deleted = false;";
-
-        /// <summary>
-        /// 查詢語句：列出所有未刪除的客戶信息
-        /// </summary>
-        private readonly string queryListAllCustomers = "SELECT * FROM \"Customers\" WHERE is_deleted = false;";
-
-		/// <summary>
-		/// 更新語句：更新客戶KYC狀態
-		/// </summary>
-		private readonly string queryUpdateCustomerKyc = "UPDATE \"Customers\" " +
-            "SET kyc_status = @KYCStatus , update_at = @UpdateAt " +
-            "WHERE customer_id = @CustomerId AND is_deleted = false;";
-
-		/// <summary>
-		/// 數據訪問對象，用於執行數據庫操作
-		/// </summary>
-		private IDataAccess _dataAccess;
-
-        /// <summary>
-        /// 數據訪問對象屬性，用於設置和獲取數據訪問對象
-        /// </summary>
-        public IDataAccess DataAccess
+        /// <param name="connectionFactory">數據庫連接工廠實例</param>
+        /// <param name="customerRepository">客戶服務實例</param>
+        /// <param name="customerAuthRepository">客戶認證服務實例</param>
+        /// <param name="timeProvider">時間提供者實例</param>
+        /// <exception cref="ArgumentNullException">参数空异常</exception>
+        public CustomerService(IConnectionFactory connectionFactory, ICustomerRepository customerRepository, ICustomerAuthRepository customerAuthRepository, ITimeProvider timeProvider) : base(connectionFactory)
         {
-            set => _dataAccess = value ?? throw new ArgumentNullException(nameof(value), "Data access cannot be null.");
+            // 確保服務實例不為空，否則拋出異常
+            _customerRepository = customerRepository ?? throw new ArgumentNullException(nameof(customerRepository), "Customer service cannot be null.");
+
+            // 確保認證服務實例不為空，否則拋出異常
+            _customerAuthRepository = customerAuthRepository ?? throw new ArgumentNullException(nameof(customerAuthRepository), "Customer auth service cannot be null.");
+
+            // 確保時間提供者不為空，否則拋出異常
+            _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider), "Time provider cannot be null.");
         }
 
         /// <summary>
-        /// 客戶服務構造函數
-        /// </summary>
-        /// <param name="dataAccess">數據訪問對象</param>
-        public CustomerService(IDataAccess dataAccess)
-        {
-            _dataAccess = dataAccess; // 初始化數據訪問對象
-        }
-
-        /// <summary>
-        /// 刪除客戶信息
-        /// </summary>
-        /// <param name="customer">客戶信息</param>
-        /// <returns>true:刪除成功/false:刪除失敗</returns>
-        public async Task<bool> DeleteCustomer(CustomerModel customer)
-        {
-            CheckDataAccess();
-
-            // 執行刪除操作
-            return await _dataAccess.DbConnection.ExecuteAsync(queryDeleteCustomer, customer) > 0;
-        }
-
-        /// <summary>
-        /// 通過客戶ID獲取客戶信息
+        /// 獲取客戶信息
         /// </summary>
         /// <param name="id">客戶ID</param>
-        /// <returns>客戶信息</returns>
-        /// <exception cref="InvalidOperationException">无效操作异常</exception>
-        public async Task<CustomerModel> GetCustomerById(int id)
+        /// <returns>客戶資料傳輸物件</returns>
+        public async Task<CustomerDto> GetCustomerInfo(int id)
         {
-            // 訪問數據庫並執行查詢
-            var customer = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerModel>(queryGetCustomerById, new { id });
-            if (customer == null)
+            // 生成數據訪問對象，並設置客戶服務的數據訪問對象
+            using (var dataAccess = await CreateConnectionAsync())
             {
-                // 如果沒有找到客戶，則拋出異常
-                throw new InvalidOperationException($"Customer with ID {id} not found.");
+                // 設置數據訪問對象到客戶服務
+                _customerRepository.DataAccess = dataAccess;
+
+                // 獲取客戶信息
+                var customer = await _customerRepository.GetCustomerById(id);
+
+                // 如果客戶不存在，則拋出異常
+                if (customer == null)
+                {
+                    return new CustomerDto();
+                }
+
+                // 將客戶模型轉換為客戶資料傳輸物件
+                return new CustomerDto
+                {
+                    CustomerId = customer.CustomerId,
+                    Name = customer.Name,
+                    Gender = customer.Gender,
+                    BirthDate = customer.BirthDate,
+                    IDType = customer.IDType,
+                    IDNumber = customer.IDNumber,
+                    Address = customer.Address,
+                    Phone = customer.Phone,
+                    Email = customer.Email,
+                    KYCStatus = customer.KYCStatus,
+                    CreatedAt = customer.CreatedAt,
+                    UpdateAt = customer.UpdateAt,
+                    DeletedAt = customer.DeletedAt,
+                    IsDeleted = customer.IsDeleted,
+                    DeletedReason = customer.DeletedReason
+                };
             }
-
-            // 返回查詢結果
-            return customer;
-
-        }
-
-        /// <summary>
-        /// 插入新的客戶信息
-        /// </summary>
-        /// <param name="customer">新的客戶信息</param>
-        /// <returns>客戶ID</returns>
-        public async Task<int> InsertCustomer(CustomerModel customer)
-        {
-            // 執行插入操作
-            var customerId = await _dataAccess.DbConnection.QuerySingleAsync(queryInsertCustomer, customer);
-
-            // 如果插入成功，返回新客戶的ID
-            return customerId.customer_id;
         }
 
         /// <summary>
         /// 列出所有客戶信息
         /// </summary>
-        /// <returns>客戶信息列表</returns>
-        public async Task<List<CustomerModel>> ListAll()
+        /// <returns>客戶資料傳輸物件列表</returns>
+        public async Task<List<CustomerDto>> ListAllCustomers()
         {
-            // 執行查詢操作，獲取所有未刪除的客戶信息
-            var customers = await _dataAccess.DbConnection.QueryAsync<CustomerModel>(queryListAllCustomers);
-
-            // 將查詢結果轉換為列表並返回
-            return customers.ToList();
-        }
-
-        /// <summary>
-        /// 更新客戶信息
-        /// </summary>
-        /// <param name="customer">客戶信息</param>
-        /// <returns>true:更新成功/false:更新失敗</returns>
-        public async Task<bool> UpdateCustomer(CustomerModel customer)
-        {
-            // 執行更新操作
-            return await _dataAccess.DbConnection.ExecuteAsync(queryUpdateCustomer, customer) > 0;
-        }
-
-        /// <summary>
-        /// 檢查數據訪問對象是否已設置
-        /// </summary>
-        /// <exception cref="InvalidOperationException">无效操作异常</exception>
-        private void CheckDataAccess()
-        {
-            // 如果數據訪問對象未設置，則拋出異常
-            if (_dataAccess == null)
+            using (var dataAccess = await CreateConnectionAsync())
             {
-                throw new InvalidOperationException("Data access is not set.");
+                _customerRepository.DataAccess = dataAccess;
+
+                // 獲取所有客戶信息
+                var customers = await _customerRepository.ListAll();
+
+                // 創建客戶資料傳輸物件列表
+                var customerDtos = new List<CustomerDto>();
+
+                // 將客戶模型列表轉換為客戶資料傳輸物件列表
+                foreach (var customer in customers)
+                {
+                    var customerDto = new CustomerDto
+                    {
+                        CustomerId = customer.CustomerId,
+                        Name = customer.Name,
+                        Gender = customer.Gender,
+                        BirthDate = customer.BirthDate,
+                        IDType = customer.IDType,
+                        IDNumber = customer.IDNumber,
+                        Address = customer.Address,
+                        Phone = customer.Phone,
+                        Email = customer.Email,
+                        KYCStatus = customer.KYCStatus,
+                        CreatedAt = customer.CreatedAt,
+                        UpdateAt = customer.UpdateAt,
+                        DeletedAt = customer.DeletedAt,
+                        IsDeleted = customer.IsDeleted,
+                        DeletedReason = customer.DeletedReason
+                    };
+
+                    customerDtos.Add(customerDto);
+                }
+
+                // 返回客戶資料傳輸物件列表
+                return customerDtos;
             }
         }
 
         /// <summary>
-        /// 通過客戶電話號碼獲取客戶信息
+        /// 修改客戶信息
         /// </summary>
-        /// <param name="phone">電話號碼</param>
-        /// <returns>客戶信息</returns>
-        public async Task<CustomerModel?> GetCustomerByPhone(string phone)
+        /// <param name="customerRequest">客戶請求</param>
+        /// <returns>true:修改成功/false:修改失敗</returns>
+        public async Task<bool> ModifyCustomer(CustomerRequest customerRequest)
         {
-            // 執行查詢操作，獲取指定電話號碼的客戶信息
-            var customer = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerModel>(queryGetCustomerByPhone, new { Phone = phone });
+            // 創建數據訪問對象，並開始事務
+            using (var dataAccess = await CreateConnectionAsync(transaction: true))
+            {
+                try
+                {
+                    // 設置數據訪問對象到客戶服務和客戶認證服務
+                    _customerRepository.DataAccess = dataAccess;
+                    _customerAuthRepository.DataAccess = dataAccess;
 
-            // 如果沒有找到客戶，則返回null
-            return customer ?? null;
+                    // 創建客戶模型，並從請求中填充數據
+                    var customer = new CustomerModel
+                    {
+                        CustomerId = customerRequest.Customer.CustomerId,
+                        Name = customerRequest.Customer.Name,
+                        Gender = customerRequest.Customer.Gender,
+                        BirthDate = customerRequest.Customer.BirthDate,
+                        IDType = customerRequest.Customer.IDType,
+                        IDNumber = customerRequest.Customer.IDNumber,
+                        Address = customerRequest.Customer.Address,
+                        Phone = customerRequest.Customer.Phone,
+                        Email = customerRequest.Customer.Email,
+                        KYCStatus = customerRequest.Customer.KYCStatus,
+                        UpdateAt = _timeProvider.Now(),
+                    };
+
+                    // 更新客戶信息，如果更新失敗，則拋出異常
+                    if (!await _customerRepository.UpdateCustomer(customer))
+                    {
+                        var e = new UnableToOperateDBException("Failed to update customer.");
+                        e.Result = false;
+                        throw e;
+                    }
+
+                    // 創建客戶認證模型，並從請求中填充數據
+                    var customerAuth = new CustomerAuthModel
+                    {
+                        CustomerId = customerRequest.Customer.CustomerId,
+                        LoginId = customerRequest.Customer.Name,
+                        PasswordHash = customerRequest.PasswordHash,
+                        TwoFactorEnabled = customerRequest.TwoFactorEnabled,
+                        UpdateAt = _timeProvider.Now()
+                    };
+
+                    // 獲取原有客戶認證信息
+                    var currentAuth = await _customerAuthRepository.GetAuthByCustomerId(customer.CustomerId);
+
+                    // 計算是否需要異動認證（避免空密碼覆蓋）
+                    var loginIdChanged = currentAuth == null || customerRequest.Customer.Name != currentAuth.LoginId;
+                    var tfaChanged = currentAuth == null || customerRequest.TwoFactorEnabled != currentAuth.TwoFactorEnabled;
+                    var pwdChanged = !string.IsNullOrWhiteSpace(customerRequest.PasswordHash) &&
+                                          (currentAuth == null || customerRequest.PasswordHash != currentAuth.PasswordHash);
+
+                    if (currentAuth == null)
+                    {
+                        // 沒有就補建（只在必要欄位齊備時）
+                        var newAuth = new CustomerAuthModel
+                        {
+                            CustomerId = customer.CustomerId,
+                            LoginId = customerRequest.Customer.Name,
+                            PasswordHash = customerRequest.PasswordHash,
+                            TwoFactorEnabled = customerRequest.TwoFactorEnabled,
+                            CreatedAt = _timeProvider.Now(),
+                        };
+                        if (!await _customerAuthRepository.InsertAuthEntry(newAuth))
+                        {
+                            var e = new UnableToOperateDBException("Failed to insert customer authentication.");
+                            e.Result = false;
+                            throw e;
+                        }                           
+                    }
+                    else if (loginIdChanged || tfaChanged || pwdChanged)
+                    {
+                        // 只帶需要變更的欄位；密碼僅在有新值時更新
+                        var authToUpdate = new CustomerAuthModel
+                        {
+                            CustomerId = customer.CustomerId,
+                            LoginId = loginIdChanged ? customerRequest.Customer.Name : currentAuth.LoginId,
+                            TwoFactorEnabled = tfaChanged ? customerRequest.TwoFactorEnabled : currentAuth.TwoFactorEnabled,
+                            PasswordHash = pwdChanged ? customerRequest.PasswordHash : currentAuth.PasswordHash,
+                            UpdateAt = _timeProvider.Now()
+                        };
+                        if (!await _customerAuthRepository.UpdateAuthEntry(authToUpdate))
+                        {
+                            var e = new UnableToOperateDBException("Failed to update customer authentication.");
+                            e.Result = false;
+                            throw e;
+                        }
+                    }
+
+                    // 提交事務
+                    dataAccess.Commit();
+
+                    // 如果所有操作成功，提交事務並返回true
+                    return true;
+                }
+                catch (UnableToOperateDBException e)
+                {
+                    // 如果發生無效操作異常，回滾事務並返回false
+                    dataAccess.Rollback();
+                    return e.Result;
+                }
+            }
         }
 
         /// <summary>
-        /// 通過客戶電子郵件獲取客戶信息
+        /// 註冊新客戶
         /// </summary>
-        /// <param name="email">電子郵件</param>
-        /// <returns>客戶信息</returns>
-        public async Task<CustomerModel?> GetCustomerByEmail(string email)
+        /// <param name="customerRequest">新的客戶請求</param>
+        /// <returns>true:注冊成功/false:注冊失敗</returns>
+        public async Task<bool> RegisterCustomer(CustomerRequest customerRequest)
         {
-            // 執行查詢操作，獲取指定電子郵件的客戶信息
-            var customer = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerModel>(queryGetCustomerByEmail, new { Email = email });
+            // 創建數據訪問對象，並開始事務
+            using (var dataAccess = await CreateConnectionAsync(transaction: true))
+            {
+                try
+                {
+                    // 設置數據訪問對象到客戶服務和客戶認證服務
+                    _customerRepository.DataAccess = dataAccess;
+                    _customerAuthRepository.DataAccess = dataAccess;
 
-            // 如果沒有找到客戶，則返回null
-            return customer ?? null;
+                    // 創建客戶模型，並從請求中填充數據
+                    var customer = new CustomerModel
+                    {
+                        Name = customerRequest.Customer.Name,
+                        Gender = customerRequest.Customer.Gender,
+                        BirthDate = customerRequest.Customer.BirthDate,
+                        IDType = customerRequest.Customer.IDType,
+                        IDNumber = customerRequest.Customer.IDNumber,
+                        Address = customerRequest.Customer.Address,
+                        Phone = customerRequest.Customer.Phone,
+                        Email = customerRequest.Customer.Email,
+                        KYCStatus = customerRequest.Customer.KYCStatus,
+                        CreatedAt = _timeProvider.Now(),
+                        IsDeleted = false,
+                    };
+
+                    // 插入新客戶信息並獲取客戶ID
+                    customer.CustomerId = await _customerRepository.InsertCustomer(customer);
+
+                    // 如果客戶ID小於等於0，則拋出異常
+                    if (customer.CustomerId <= 0)
+                    {
+                        var e = new UnableToOperateDBException("Failed to insert or update customer.");
+                        e.Result = false;
+                        throw e;
+                    }
+
+                    // 創建客戶認證模型，並從請求中填充數據
+                    var customerAuth = new CustomerAuthModel
+                    {
+                        CustomerId = customer.CustomerId,
+                        LoginId = customer.Name,
+                        PasswordHash = customerRequest.PasswordHash,
+                        TwoFactorEnabled = customerRequest.TwoFactorEnabled,
+                        CreatedAt = _timeProvider.Now(),
+                        IsDeleted = false,
+                    };
+
+                    // 插入客戶認證信息，如果插入失敗，則拋出異常
+                    if (!await _customerAuthRepository.InsertAuthEntry(customerAuth))
+                    {
+                        var e = new UnableToOperateDBException("Failed to insert or update customer authentication.");
+                        e.Result = false;
+                        throw e;
+                    }
+
+                    // 提交事務
+                    dataAccess.Commit();
+
+                    // 如果所有操作成功，提交事務並返回true
+                    return true;
+                }
+                catch (UnableToOperateDBException e)
+                {
+                    // 如果發生無效操作異常，回滾事務並返回false
+                    dataAccess.Rollback();
+                    return e.Result;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 刪除客戶信息
+        /// </summary>
+        /// <param name="customerRequest">客戶請求</param>
+        /// <returns>true:刪除成功/false:刪除失敗</returns>
+        public async Task<bool> RemoveCustomer(CustomerRequest customerRequest)
+        {
+            using (var dataAccess = await CreateConnectionAsync(transaction: true))
+            {
+                try
+                {
+                    // 設置數據訪問對象到客戶服務和客戶認證服務
+                    _customerRepository.DataAccess = dataAccess;
+                    _customerAuthRepository.DataAccess = dataAccess;
+
+                    // 創建客戶模型，並從請求中填充數據
+                    var customer = new CustomerModel
+                    {
+                        CustomerId = customerRequest.Customer.CustomerId,
+                        DeletedAt = _timeProvider.Now(),
+                        IsDeleted = true,
+                        DeletedReason = customerRequest.Customer.DeletedReason
+                    };
+
+                    // 刪除客戶信息，如果刪除失敗，則拋出異常
+                    if (!await _customerRepository.DeleteCustomer(customer))
+                    {
+                        var e = new UnableToOperateDBException("Failed to delete customer.");
+                        e.Result = false;
+                        throw e;
+                    }
+
+                    // 創建客戶認證模型，並從請求中填充數據
+                    var customerAuth = new CustomerAuthModel
+                    {
+                        CustomerId = customerRequest.Customer.CustomerId,
+                        DeletedAt = _timeProvider.Now(),
+                        IsDeleted = true,
+                    };
+
+                    // 刪除客戶認證信息，如果刪除失敗，則拋出異常
+                    if (!await _customerAuthRepository.DeleteAuthEntry(customerAuth))
+                    {
+                        var e = new UnableToOperateDBException("Failed to delete customer authentication.");
+                        e.Result = false;
+                        throw e;
+                    }
+
+                    // 提交事務
+                    dataAccess.Commit();
+
+                    // 如果所有操作成功，提交事務並返回true
+                    return true;
+                }
+                catch (UnableToOperateDBException e)
+                {
+                    // 如果發生無效操作異常，回滾事務並返回false
+                    dataAccess.Rollback();
+                    return e.Result;
+                }
+            }
         }
 
 		/// <summary>
-		/// 更新客戶KYC狀態
+		/// 更新KYC狀態
 		/// </summary>
 		/// <param name="customerId">客戶ID</param>
-		/// <param name="status">客戶KYC狀態</param>
-		/// <param name="updateAt">更新時間</param>
+		/// <param name="kycStatus">KYC狀態</param>
 		/// <returns>true:更新成功/false:更新失敗</returns>
-		public async Task<bool> UpdateCustomerKycStatus(int customerId, KYCStatus status, DateTime updateAt)
+		public async Task<bool> UpdateKycStatus(int customerId, KYCStatus kycStatus)
 		{
-            return await _dataAccess.DbConnection.ExecuteAsync(queryUpdateCustomerKyc, new { CustomerId = customerId, KYCStatus = status, UpdateAt = updateAt }) > 0;
-		}
+            using (var dataAccess = await CreateConnectionAsync(transaction: true))
+            {
+                try
+                {
+					// 設置數據訪問對象到客戶服務
+					_customerRepository.DataAccess = dataAccess;
 
-		/// <summary>
-		/// 通過客戶電子郵件或電話號碼獲取客戶信息
-		/// </summary>
-		/// <param name="email">電子郵件</param>
-		/// <param name="phone">電話號碼</param>
-		/// <returns>客戶信息</returns>
-		public Task<CustomerModel?> GetCustomerByEmailOrPhone(string? email, string? phone)
-		{
-			if (!string.IsNullOrEmpty(email))
-            {
-                return GetCustomerByEmail(email);
+					// 更新客戶KYC狀態，如果更新失敗，則拋出異常
+					var success = await _customerRepository.UpdateCustomerKycStatus(customerId, kycStatus, _timeProvider.Now());
+
+					// 如果更新失敗，則拋出異常
+					if (!success)
+                    {
+                        var e = new UnableToOperateDBException("Failed to update customer KYC status.");
+                        e.Result = false;
+                        throw e;
+					}
+
+					// 提交事務
+					dataAccess.Commit();
+
+					// 如果所有操作成功，提交事務並返回true
+					return true;
+				}
+                catch (UnableToOperateDBException e)
+                {
+					// 如果發生無效操作異常，回滾事務並返回false
+					dataAccess.Rollback();
+					return e.Result;
+				}
             }
-            else if (!string.IsNullOrEmpty(phone))
-            {
-                return GetCustomerByPhone(phone);
-            }
-            else
-            {
-                return Task.FromResult<CustomerModel?>(null);
-			}
 		}
 	}
 
     /// <summary>
-    /// 客戶服務接口
+    /// 客戶邏輯接口，用於定義客戶相關的業務邏輯方法
     /// </summary>
     public interface ICustomerService
     {
         /// <summary>
-        /// 數據訪問對象，用於執行數據庫操作
-        /// </summary>
-        IDataAccess DataAccess { set; }
-
-        /// <summary>
-        /// 通過客戶ID獲取客戶信息
+        /// 獲取客戶信息
         /// </summary>
         /// <param name="id">客戶ID</param>
-        /// <returns>客戶信息</returns>
-        Task<CustomerModel> GetCustomerById(int id);
+        /// <returns>客戶資料傳輸物件</returns>
+        Task<CustomerDto> GetCustomerInfo(int id);
 
         /// <summary>
-        /// 插入新的客戶信息
+        /// 註冊新客戶
         /// </summary>
-        /// <param name="customer">新的客戶信息</param>
-        /// <returns>客戶ID</returns>
-        Task<int> InsertCustomer(CustomerModel customer);
+        /// <param name="customerRequest">新的客戶請求</param>
+        /// <returns>true:注冊成功/false:注冊失敗</returns>
+        Task<bool> RegisterCustomer(CustomerRequest customerRequest);
 
         /// <summary>
-        /// 更新客戶信息
+        /// 修改客戶信息
         /// </summary>
-        /// <param name="customer">客戶信息</param>
-        /// <returns>true:更新成功/false:更新失敗</returns>
-        Task<bool> UpdateCustomer(CustomerModel customer);
+        /// <param name="customerRequest">客戶請求</param>
+        /// <returns>true:修改成功/false:修改失敗</returns>
+        Task<bool> ModifyCustomer(CustomerRequest customerRequest);
 
         /// <summary>
         /// 刪除客戶信息
         /// </summary>
-        /// <param name="customer">客戶信息</param>
+        /// <param name="customerRequest">客戶請求</param>
         /// <returns>true:刪除成功/false:刪除失敗</returns>
-        Task<bool> DeleteCustomer(CustomerModel customer);
+        Task<bool> RemoveCustomer(CustomerRequest customerRequest);
 
         /// <summary>
         /// 列出所有客戶信息
         /// </summary>
-        /// <returns>客戶信息列表</returns>
-        Task<List<CustomerModel>> ListAll();
-
-        /// <summary>
-        /// 通過客戶電話號碼獲取客戶信息
-        /// </summary>
-        /// <param name="phone">電話號碼</param>
-        /// <returns>客戶信息</returns>
-        Task<CustomerModel?> GetCustomerByPhone(string phone);
-
-        /// <summary>
-        /// 通過客戶電子郵件獲取客戶信息
-        /// </summary>
-        /// <param name="email">電子郵件</param>
-        /// <returns>客戶信息</returns>
-        Task<CustomerModel?> GetCustomerByEmail(string email);
+        /// <returns>客戶資料傳輸物件列表</returns>
+        Task<List<CustomerDto>> ListAllCustomers();
 
 		/// <summary>
-		/// 通過客戶電子郵件或電話號碼獲取客戶信息
-		/// </summary>
-		/// <param name="email">電子郵件</param>
-		/// <param name="phone">電話號碼</param>
-		/// <returns>客戶信息</returns>
-		Task<CustomerModel?> GetCustomerByEmailOrPhone(string? email, string? phone);
-
-		/// <summary>
-		/// 更新客戶KYC狀態
+		/// 更新KYC狀態
 		/// </summary>
 		/// <param name="customerId">客戶ID</param>
-		/// <param name="status">客戶KYC狀態</param>
-		/// <param name="updateAt">更新時間</param>
+		/// <param name="kycStatus">KYC狀態</param>
 		/// <returns>true:更新成功/false:更新失敗</returns>
-		Task<bool> UpdateCustomerKycStatus(int customerId, KYCStatus status, DateTime updateAt);
-    }
+		Task<bool> UpdateKycStatus(int customerId, KYCStatus kycStatus);
+	}
 }

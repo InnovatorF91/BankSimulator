@@ -1,6 +1,6 @@
 using ServerProject.Common;     // IConnectionFactory, IDataAccess
-using ServerProject.Logics;     // ICustomerLogic, CustomerLogic
-using ServerProject.Services;   // ICustomerService, CustomerService, ICustomerAuthService, CustomerAuthService
+using ServerProject.Services;     // ICustomerService, CustomerService
+using ServerProject.Repositories;   // ICustomerRepository, CustomerRepository, ICustomerAuthRepository, CustomerAuthRepository
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,12 +17,12 @@ builder.Services.AddScoped<IDataAccess>(sp =>
 });
 builder.Services.AddSingleton<ITimeProvider, SystemClock>();
 
-// 2) Domain Services
-builder.Services.AddScoped<ICustomerService, CustomerService>();
-builder.Services.AddScoped<ICustomerAuthService, CustomerAuthService>();
+// 2) Domain Repositories
+builder.Services.AddScoped<ICustomerRepository, CustomerRepository>();
+builder.Services.AddScoped<ICustomerAuthRepository, CustomerAuthRepository>();
 
-// 3) Business Logic
-builder.Services.AddScoped<ICustomerLogic, CustomerLogic>();
+// 3) Business Service
+builder.Services.AddScoped<ICustomerService, CustomerService>();
 
 var app = builder.Build();
 

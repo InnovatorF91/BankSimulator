@@ -2,7 +2,7 @@
 
 namespace ServerProject.Common
 {
-    public class CryptoService : ICryptoService
+    public class CryptoRepository : ICryptoRepository
     {
         /// <summary>
         /// 哈希選項，用於配置哈希算法的參數
@@ -10,10 +10,10 @@ namespace ServerProject.Common
         private readonly HashOption _option;
 
         /// <summary>
-        /// CryptoService 構造函數，初始化哈希選項
+        /// CryptoRepository 構造函數，初始化哈希選項
         /// </summary>
         /// <param name="option">哈希選項</param>
-        public CryptoService(HashOption option)
+        public CryptoRepository(HashOption option)
         {
             _option = option;
         }
@@ -89,7 +89,7 @@ namespace ServerProject.Common
         }
     }
 
-    public interface ICryptoService
+    public interface ICryptoRepository
     {
         /// <summary>
         /// 生成哈希值
