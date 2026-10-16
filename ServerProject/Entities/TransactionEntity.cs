@@ -26,8 +26,14 @@ namespace ServerProject.Entities
         [Column("status")]
         public TransactionStatus Status { get; set; } // 交易狀態
         [Column("group_id")]
-        public long? GrouppId { get; set; } // 群組ID（如果有的話，例如批量交易）
+        public Guid? GroupId { get; set; } // 群組ID（如果有的話，例如批量交易）
         [Column("note")]
         public string? Note { get; set; } // 交易備註
-    }
+		[Column("currency")]
+		public string Currency { get; set; } = string.Empty; // 货币类型
+		[Column("balance_before")]
+		public decimal BalanceBefore { get; set; } // 交易前余额
+		[Column("balance_after")]
+		public decimal BalanceAfter { get; set; } // 交易后余额
+	}
 }

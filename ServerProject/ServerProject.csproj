@@ -7,10 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="Sql\Account\GetAllAccountsByCustomerId.sql" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\..\ShareProject\ShareProject\ShareProject.csproj" />
   </ItemGroup>
 

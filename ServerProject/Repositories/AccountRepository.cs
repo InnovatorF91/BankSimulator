@@ -78,6 +78,34 @@ namespace ServerProject.Repositories
 		}
 
 		/// <summary>
+		/// 根据账户ID和客户ID取得账户，并锁定该账户记录以便更新。
+		/// </summary>
+		/// <param name="accountId">账户ID</param>
+		/// <param name="customerId">客户ID</param>
+		public async Task<AccountEntity?> GetAccountByIdAndCustomerIdForUpdate(long accountId, int customerId)
+		{
+			var sql = LoadSql("Account.GetAccountByIdAndCustomerIdForUpdate");
+			return await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+			{
+				AccountId = accountId,
+				CustomerId = customerId
+			}, _dataAccess.DbTransaction);
+		}
+
+		/// <summary>
+		/// 根据账户ID取得账户，并锁定该账户记录以便更新。
+		/// </summary>
+		/// <param name="accountId">账户ID</param>
+		public async Task<AccountEntity?> GetAccountByIdForUpdate(long accountId)
+		{
+			var sql = LoadSql("Account.GetAccountByIdForUpdate");
+			return await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+			{
+				AccountId = accountId
+			}, _dataAccess.DbTransaction);
+		}
+
+		/// <summary>
 		/// 根据操作日志ID查找该条日志
 		/// </summary>
 		/// <param name="operationLogId">操作日志ID</param>
@@ -265,6 +293,13 @@ namespace ServerProject.Repositories
 		Task<AccountEntity?> GetAccountByIdAndCustomerId(long accountId, int customerId);
 
 		/// <summary>
+		/// 根据账户ID和客户ID取得账户，并锁定该账户记录以便更新。
+		/// </summary>
+		/// <param name="accountId">账户ID</param>
+		/// <param name="customerId">客户ID</param>
+		Task<AccountEntity?> GetAccountByIdAndCustomerIdForUpdate(long accountId, int customerId);
+
+		/// <summary>
 		/// 根据客户ID取得该客户名下未关闭账户。
 		/// 普通用户侧使用。
 		/// Active / Frozen 会返回，Closed 不返回。
@@ -368,5 +403,11 @@ namespace ServerProject.Repositories
 		/// <param name="operationLogId">操作日志ID</param>
 		/// <returns>账户操作日志记录</returns>
 		Task<AccountOperationLogEntity?> GetAccountOperationLogById(long operationLogId);
+
+		/// <summary>
+		/// 根据账户ID取得账户，并锁定该账户记录以便更新。
+		/// </summary>
+		/// <param name="accountId">账户ID</param>
+		Task<AccountEntity?> GetAccountByIdForUpdate(long accountId);
 	}
 }

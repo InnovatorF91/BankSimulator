@@ -4,114 +4,166 @@ namespace ServerProject.Common
 {
     public class DataAccess : IDataAccess
     {
-        /// <summary>
-        /// 數據庫連接對象
-        /// </summary>
-        private readonly IDbConnection _conn;
+		/// <summary>
+		/// 數據庫連接對象
+		/// </summary>
+		private readonly IDbConnection _conn;
 
-        /// <summary>
-        /// 數據庫事務對象
-        /// </summary>
-        private IDbTransaction? _tx;
+		/// <summary>
+		/// 數據庫交易對象
+		/// </summary>
+		private IDbTransaction? _tx;
 
-        /// <summary>
-        /// 是否使用事務
-        /// </summary>
-        public bool UseTransaction { get; }
+		/// <summary>
+		/// 是否已經釋放資源
+		/// </summary>
+		private bool _disposed;
 
-        /// <summary>
-        /// 是否已經釋放資源
-        /// </summary>
-        public bool IsDisposed { get; private set; } = false;
+		/// <summary>
+		/// 是否使用交易
+		/// </summary>
+		public bool UseTransaction { get; }
 
-        /// <summary>
-        /// 數據訪問類構造函數
-        /// </summary>
-        /// <param name="connection">數據庫連接對象</param>
-        /// <param name="useTransaction">數據庫事務對象</param>
-        /// <param name="isolationLevel">交易隔離級別（默認是預設）</param>
-        public DataAccess(
-            IDbConnection connection,
-            bool useTransaction = false,
-            IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
-        {
-            // 確保連接字符串符合 Npgsql 的格式要求
-            _conn = connection;
-            _conn.Open(); // Npgsql 内置连接池会复用底层物理连接
+		/// <summary>
+		/// 數據庫連接對象
+		/// </summary>
+		public IDbConnection DbConnection => _conn;
 
-            // 設置事務使用狀態
-            UseTransaction = useTransaction;
-            if (UseTransaction)
-            {
-                // 如果使用事務，則開始一個新的事務
-                _tx = _conn.BeginTransaction(isolationLevel);
-            }
-        }
+		/// <summary>
+		/// 數據庫交易對象
+		/// </summary>
+		public IDbTransaction DbTransaction =>
+			_tx ?? throw new InvalidOperationException(
+				"No active transaction.");
 
-        /// <summary>
-        /// 數據庫連接對象
-        /// </summary>
-        public IDbConnection DbConnection => _conn;
+		/// <summary>
+		/// 初始化 DataAccess 類別的新實例
+		/// </summary>
+		/// <param name="connection">数据库连接对象</param>
+		/// <param name="useTransaction">是否使用交易</param>
+		/// <param name="isolationLevel">交易隔離級別</param>
+		/// <exception cref="ArgumentNullException"></exception>
+		public DataAccess(
+			IDbConnection connection,
+			bool useTransaction = false,
+			IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
+		{
+			_conn = connection
+				?? throw new ArgumentNullException(nameof(connection));
 
-        /// <summary>
-        /// 數據庫事務對象
-        /// </summary>
-        public IDbTransaction DbTransaction =>
-            // 如果使用事務，則返回當前事務對象，否則拋出異常
-            UseTransaction
-                ? _tx ?? throw new InvalidOperationException("Transaction has not been started.")
-                : throw new InvalidOperationException("This DataAccess was created without transaction.");
+			try
+			{
+				_conn.Open();
 
-        /// <summary>
-        /// 提交當前事務
-        /// </summary>
-        /// <exception cref="InvalidOperationException">当方法调用对于对象的当前状态无效时引发的异常</exception>
-        public void Commit()
-        {
-            // 確保使用事務，並且當前事務不為空
-            if (!UseTransaction) throw new InvalidOperationException("Transactions are disabled.");
+				if (useTransaction)
+				{
+					_tx = _conn.BeginTransaction(isolationLevel);
+				}
 
-            // 如果事務為空，則拋出異常
-            if (_tx == null) throw new InvalidOperationException("No active transaction to commit.");
+				UseTransaction = useTransaction;
+			}
+			catch
+			{
+				_conn.Dispose();
+				throw;
+			}
+		}
 
-            // 提交事務並釋放資源
-            _tx.Commit();
-            _tx.Dispose();
-            _tx = null;
-        }
+		/// <summary>
+		/// 提交交易
+		/// </summary>
+		/// <exception cref="InvalidOperationException">没有活动的交易可提交 </exception>
+		public void Commit()
+		{
+			ThrowIfDisposed();
 
-        /// <summary>
-        /// 回滾當前事務
-        /// </summary>
-        /// <exception cref="InvalidOperationException">当方法调用对于对象的当前状态无效时引发的异常</exception>
-        public void Rollback()
-        {
-            // 確保使用事務，並且當前事務不為空
-            if (!UseTransaction) throw new InvalidOperationException("Transactions are disabled.");
+			if (_tx == null)
+				throw new InvalidOperationException(
+					"No active transaction to commit.");
 
-            // 如果事務為空，則直接返回
-            if (_tx == null) return;
+			var tx = _tx;
 
-            // 回滾事務並釋放資源
-            _tx.Rollback();
-            _tx.Dispose();
-            _tx = null;
-        }
+			try
+			{
+				tx.Commit();
+			}
+			finally
+			{
+				_tx = null;
 
-        /// <summary>
-        /// 釋放資源，關閉數據庫連接並回滾事務（如果有的話）
-        /// </summary>
-        public void Dispose()
-        {
-            // 確保沒有重複釋放資源
-            if (!IsDisposed)
-            {
-                // 如果沒有釋放資源，則關閉數據庫連接，並釋放資源
-                DbConnection.Close();
-                DbConnection.Dispose();
-                IsDisposed = true;
-                GC.Collect();
-            }
-        }
-    }
+				try
+				{
+					tx.Dispose();
+				}
+				catch
+				{
+					// TODO: 后续统一接入日志系统。
+					// 不让资源释放异常覆盖 Commit 的结果。
+				}
+			}
+		}
+
+		/// <summary>
+		/// 回滚交易
+		/// </summary>
+		public void Rollback()
+		{
+			ThrowIfDisposed();
+
+			if (_tx == null)
+				return;
+
+			var tx = _tx;
+
+			try
+			{
+				tx.Rollback();
+			}
+			finally
+			{
+				_tx = null;
+
+				try
+				{
+					tx.Dispose();
+				}
+				catch
+				{
+					// TODO: 后续统一接入日志系统。
+					// 不让 Dispose 异常覆盖 Rollback 异常。
+				}
+			}
+		}
+
+		/// <summary>
+		/// 釋放資源
+		/// </summary>
+		public void Dispose()
+		{
+			if (_disposed)
+				return;
+
+			try
+			{
+				_tx?.Dispose();
+				_tx = null;
+			}
+			finally
+			{
+				_conn.Dispose();
+				_disposed = true;
+			}
+
+			GC.SuppressFinalize(this);
+		}
+
+		/// <summary>
+		/// 檢查是否已經釋放資源，如果已經釋放則拋出 ObjectDisposedException
+		/// </summary>
+		private void ThrowIfDisposed()
+		{
+			if (_disposed)
+				throw new ObjectDisposedException(nameof(DataAccess));
+		}
+	}
 }

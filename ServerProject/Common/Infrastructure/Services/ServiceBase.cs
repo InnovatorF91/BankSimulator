@@ -1,4 +1,5 @@
-﻿using System.Data.Common;
+﻿using Npgsql;
+using System.Data.Common;
 
 namespace ServerProject.Common
 {
@@ -14,15 +15,15 @@ namespace ServerProject.Common
 			_connectionFactory = connectionFactory;
 		}
 
-		/// <summary>
-		/// 建立 IDataAccess（是否開啟交易由參數決定）
-		/// </summary>
 		protected virtual Task<IDataAccess> CreateConnectionAsync(bool transaction = false)
 		{
-			// Task.Run 沒必要：這裡只是建立物件/取得連線
-			var conn = _connectionFactory.GetConnection(transaction);
-			var da = new DataAccess(conn, _connectionFactory.Transaction);
-			return Task.FromResult<IDataAccess>(da);
+			var conn = _connectionFactory.GetConnection();
+
+			IDataAccess da = new DataAccess(
+				conn,
+				useTransaction: transaction);
+
+			return Task.FromResult(da);
 		}
 
 		/// <summary>
@@ -32,10 +33,11 @@ namespace ServerProject.Common
 			Func<IDataAccess, Task<T>> action,
 			string operationName = "DB operation")
 		{
-			using var da = await CreateConnectionAsync(transaction: false);
-
+			IDataAccess? da= null; // 初始化為 null，避免編譯器警告
 			try
 			{
+				da = await CreateConnectionAsync(transaction: false);
+
 				return await action(da);
 			}
 			catch (DbException ex)
@@ -46,6 +48,10 @@ namespace ServerProject.Common
 			{
 				throw new UnableToOperateDBException($"{operationName} timed out.", ex);
 			}
+			finally
+			{
+				da?.Dispose();
+			}
 		}
 
 		/// <summary>
@@ -55,30 +61,54 @@ namespace ServerProject.Common
 			Func<IDataAccess, Task<T>> action,
 			string operationName = "DB transaction")
 		{
-			using var da = await CreateConnectionAsync(transaction: true);
+			IDataAccess? da = null;
 
 			try
 			{
+				da = await CreateConnectionAsync(transaction: true);
+
 				var result = await action(da);
 
 				da.Commit();
+
 				return result;
+			}
+			catch (PostgresException ex)
+				when (ex.SqlState == PostgresErrorCodes.DeadlockDetected)
+			{
+				if (da != null)
+					TryRollback(da);
+
+				throw new DbDeadlockException(
+					$"{operationName} failed due to a database deadlock.",
+					ex);
 			}
 			catch (DbException ex)
 			{
-				da.Rollback();
-				throw new UnableToOperateDBException($"{operationName} failed.", ex);
+				if (da != null)
+					TryRollback(da);
+
+				throw new UnableToOperateDBException(
+					$"{operationName} failed.", ex);
 			}
 			catch (TimeoutException ex)
 			{
-				da.Rollback();
-				throw new UnableToOperateDBException($"{operationName} timed out.", ex);
+				if (da != null)
+					TryRollback(da);
+
+				throw new UnableToOperateDBException(
+					$"{operationName} timed out.", ex);
 			}
 			catch
 			{
-				// 非 DB 類例外也要 rollback，避免交易掛著
-				da.Rollback();
+				if (da != null)
+					TryRollback(da);
+
 				throw;
+			}
+			finally
+			{
+				da?.Dispose();
 			}
 		}
 
@@ -97,5 +127,22 @@ namespace ServerProject.Common
 			Func<IDataAccess, Task> action,
 			string operationName = "DB transaction")
 			=> ExecuteInTxAsync(async da => { await action(da); return true; }, operationName);
+
+		/// <summary>
+		/// 嘗試回滾交易，避免覆蓋原始例外
+		/// </summary>
+		/// <param name="da">IDataAccess 實例</param>
+		private static void TryRollback(IDataAccess da)
+		{
+			try
+			{
+				da.Rollback();
+			}
+			catch
+			{
+				// 避免回滚异常覆盖原始异常。
+				// TODO: 后续统一接入日志系统。
+			}
+		}
 	}
 }

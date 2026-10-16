@@ -22,9 +22,11 @@ namespace ServerProject
 			builder.Services.AddSingleton<IConnectionFactory, ConnectionFactory>();
 			builder.Services.AddScoped<IDataAccess>(sp =>
 			{
-				var cf = sp.GetRequiredService<IConnectionFactory>();
-				var conn = cf.GetConnection(transaction: false);     // 非交易連線；交易於 UseCase 內部控制
-				return new DataAccess(conn, useTransaction: false);
+				var factory = sp.GetRequiredService<IConnectionFactory>();
+
+				return new DataAccess(
+					factory.GetConnection(),
+					useTransaction: false);
 			});
 			builder.Services.AddSingleton<ITimeProvider, SystemClock>();
 			builder.Services.AddSingleton<ICryptoRepository, CryptoRepository>();
@@ -52,7 +54,9 @@ namespace ServerProject
 			// 3) Business Service
 			builder.Services.AddScoped<ICustomerService, CustomerService>();
 			builder.Services.AddScoped<IAccountService, AccountService>();
+			builder.Services.AddScoped<IAccountAdminService, AccountAdminService>();
 			builder.Services.AddScoped<IAuthService, AuthService>();
+			builder.Services.AddScoped<ITransactionService, TransactionService>();
 
 			// 4) Session Authentication Service
 			builder.Services.AddScoped<ISessionAuthenticationService, SessionAuthenticationService>();

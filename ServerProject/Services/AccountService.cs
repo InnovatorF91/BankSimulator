@@ -37,14 +37,16 @@ namespace ServerProject.Services
 		/// </summary>
 		private readonly ITimeProvider _timeProvider;
 
-        /// <summary>
-        /// 建構函數，初始化帳戶邏輯類別的實例
-        /// </summary>
-        /// <param name="connectionFactory">數據庫連接工廠實例</param>
-        /// <param name="accountRepository">帳戶服務實例</param>
-        /// <param name="customerRepository">客戶服務實例</param>
-        /// <param name="timeProvider">時間提供者實例</param>
-        public AccountService(
+		/// <summary>
+		/// 建構函數，初始化帳戶邏輯類別的實例
+		/// </summary>
+		/// <param name="connectionFactory">數據庫連接工廠實例</param>
+		/// <param name="accountRepository">帳戶服務實例</param>
+		/// <param name="customerRepository">客戶服務實例</param>
+		/// <param name="transactionRepository">交易服務實例</param>
+		/// <param name="currentCustomer">当前登录客户信息</param>
+		/// <param name="timeProvider">時間提供者實例</param>
+		public AccountService(
 			IConnectionFactory connectionFactory, 
 			IAccountRepository accountRepository, 
 			ICustomerRepository customerRepository,
@@ -770,7 +772,7 @@ namespace ServerProject.Services
 							RelatedAccount = null,
 							CreateAt = now,
 							Status = TransactionStatus.Completed,
-							GrouppId = null,
+							GroupId = null,
 							Note = "Initial deposit"
 						};
 

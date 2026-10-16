@@ -1,4 +1,4 @@
-﻿-- 根据客户ID取得该客户名下所有账户。
+﻿-- 根据客户ID取得该客户名下所有账户
 SELECT
     account_id,
     customer_id,
