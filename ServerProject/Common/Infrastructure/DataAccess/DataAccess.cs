@@ -32,9 +32,7 @@ namespace ServerProject.Common
 		/// <summary>
 		/// 數據庫交易對象
 		/// </summary>
-		public IDbTransaction DbTransaction =>
-			_tx ?? throw new InvalidOperationException(
-				"No active transaction.");
+		public IDbTransaction? DbTransaction => _tx;
 
 		/// <summary>
 		/// 初始化 DataAccess 類別的新實例

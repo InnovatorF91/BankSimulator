@@ -36,6 +36,8 @@ namespace ServerProject.Entities
         [Column("replaced_by")]
         public long? ReplacedBy { get; set; } // 被替換的卡片ID（如果有的話）
         [Column("create_at")]
-        public DateTime CreateAt { get; set; } // 卡片創建時間
-    }
+        public DateTime CreatedAt { get; set; } // 卡片創建時間
+        [Column("update_at")]
+		public DateTime UpdatedAt { get; set; } // 卡片更新時間
+	}
 }

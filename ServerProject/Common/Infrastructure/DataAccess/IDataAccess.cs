@@ -15,7 +15,7 @@ namespace ServerProject.Common
         /// <summary>
         /// 數據庫事務對象
         /// </summary>
-        IDbTransaction DbTransaction { get; }
+        IDbTransaction? DbTransaction { get; }
 
         /// <summary>
         /// 是否使用事務
