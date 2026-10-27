@@ -57,6 +57,7 @@ namespace ServerProject
 			builder.Services.AddScoped<IAccountAdminService, AccountAdminService>();
 			builder.Services.AddScoped<IAuthService, AuthService>();
 			builder.Services.AddScoped<ITransactionService, TransactionService>();
+			builder.Services.AddScoped<ICardService, CardService>();
 
 			// 4) Session Authentication Service
 			builder.Services.AddScoped<ISessionAuthenticationService, SessionAuthenticationService>();
