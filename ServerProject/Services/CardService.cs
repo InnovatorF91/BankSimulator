@@ -3,6 +3,7 @@ using ServerProject.DTOs;
 using ServerProject.Entities;
 using ServerProject.Repositories;
 using ShareProject.Common;
+using ShareProject.Request;
 
 namespace ServerProject.Services
 {
@@ -52,6 +53,165 @@ namespace ServerProject.Services
 			_timeProvider = timeProvider;
 			_currentCustomer = currentCustomer;
 			_cardRepository = cardRepository;
+		}
+
+		/// <summary>
+		/// 封鎖卡片
+		/// </summary>
+		/// <param name="request">封鎖卡片請求資料傳輸物件</param>
+		/// <returns>封鎖卡片結果資料傳輸物件</returns>
+		public async Task<BlockCardResultDto> BlockCard(BlockCardRequest request)
+		{
+			//检查 Request 和 CardId。
+			if (request == null || request.CardId <= 0)
+			{
+				return BlockCardResultDto.Fail((int)CardErrorCode.ValidationFailed, "Invalid request or CardId.");
+			}
+
+			//获取当前客户 ID。
+			int customerId;
+
+			try
+			{
+				customerId = _currentCustomer.CustomerId;
+			}
+			catch (InvalidOperationException)
+			{
+				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
+				return BlockCardResultDto.Fail((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
+			}
+
+			try
+			{
+				// 验证当前客户是否存在
+				var customer = await ExecuteDbAsync<CustomerEntity?>(
+					async dataAccess =>
+					{
+						_customerRepository.DataAccess = dataAccess;
+						return await _customerRepository.GetCustomerById(customerId);
+					}
+				);
+
+				// 验证客户是否存在
+				if (customer == null)
+				{
+					return BlockCardResultDto.Fail((int)CustomerErrorCode.CustomerNotFound, "The customer does not exist.");
+				}
+
+				// 验证客户是否已被删除
+				if (customer.IsDeleted)
+				{
+					return BlockCardResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "The customer has been deleted.");
+				}
+
+				// 获取卡片信息
+				var card = await ExecuteDbAsync<CardEntity?>(
+					async dataAccess =>
+					{
+						_cardRepository.DataAccess = dataAccess;
+						return await _cardRepository.GetCardById(request.CardId);
+					}
+				);
+
+				// 验证卡片是否存在
+				if (card == null)
+				{
+					return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
+				}
+
+
+
+				var result = await ExecuteInTxAsync<BlockCardResultDto>(
+					async dataAccess =>
+					{
+						_accountRepository.DataAccess = dataAccess;
+						_cardRepository.DataAccess = dataAccess;
+
+						// 取得卡片所屬帳戶
+						var account = await _accountRepository.GetAccountByIdAndCustomerIdForUpdate(card.AccountId, customerId);
+
+						// 驗證帳戶是否存在且屬於當前客戶
+						if (account == null || account.CustomerId != customerId)
+						{
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
+						}
+
+						// 验证账户状态是否为关闭，如果是，则返回账户已关闭错误
+						if (account.Status == AccountStatus.Closed)
+						{
+							return BlockCardResultDto.Fail((int)AccountErrorCode.AccountAlreadyClosed,"The account has been closed.");
+						}
+
+						// 重新获取卡片信息以进行更新操作
+						var card2 = await _cardRepository.GetCardByIdForUpdate(request.CardId);
+
+						// 取得當前時間
+						var now = _timeProvider.Now();
+
+						// 验证卡片是否存在
+						if (card2 == null)
+						{
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
+						}
+
+						// 验证卡片是否属于当前客户的账户
+						if (card2.AccountId != account.AccountId)
+						{
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not belong to the account.");
+						}
+
+						// 验证卡片状态是否已经被封锁，如果是，则直接返回成功结果
+						if (card2.Status == CardStatus.Blocked)
+						{
+							return BlockCardResultDto.SuccessDto(card2.CardId,CardStatus.Blocked);
+						}
+
+						// 验证卡片是否已过期
+						if (card2.Status == CardStatus.Expired)
+						{
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardExpired, "The card has expired.");
+						}
+
+						// 验证卡片状态是否允许操作
+						if (card2.Status != CardStatus.Active)
+						{
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardStatusInvalid, "The card status does not allow this operation.");
+						}
+
+						// 验证卡片是否已过期
+						var expired = card2.ExpiryYear < now.Year || (card2.ExpiryYear == now.Year && card2.ExpiryMonth < now.Month);
+						if (expired)
+						{
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardExpired, "The card has expired.");
+						}
+
+						// 更新卡片状态为封锁
+						var affectedRows = await _cardRepository.UpdateCardStatusIfCurrentStatus(card2.CardId, CardStatus.Active, CardStatus.Blocked, now);
+
+						// 如果更新失败，说明卡片状态已发生变化，返回冲突错误
+						if (affectedRows == 0)
+						{
+							throw new CardOperationException (CardErrorCode.CardStateConflict, "The card status has changed, the update failed.");
+						}
+
+						// 返回成功结果
+						return BlockCardResultDto.SuccessDto(card2.CardId, CardStatus.Blocked);
+					}
+				);
+
+				// 如果事务执行成功，返回结果
+				return result;
+			}
+			catch (CardOperationException ex)
+			{
+				//发生异常则 Rollback
+				return BlockCardResultDto.Fail((int)ex.ErrorCode, ex.Message);
+			}
+			catch (UnableToOperateDBException)
+			{
+				//发生异常则 Rollback
+				return BlockCardResultDto.Fail((int)CardErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
+			}
 		}
 
 		/// <summary>
@@ -175,5 +335,12 @@ namespace ServerProject.Services
 		/// <returns>獲取我的卡片結果資料傳輸物件</returns>
 
 		Task<GetMyCardsResultDto> GetMyCards();
+
+		/// <summary>
+		/// 封鎖卡片
+		/// </summary>
+		/// <param name="request">封鎖卡片請求資料傳輸物件</param>
+		/// <returns>封鎖卡片結果資料傳輸物件</returns>
+		Task<BlockCardResultDto> BlockCard(BlockCardRequest request);
 	}
 }

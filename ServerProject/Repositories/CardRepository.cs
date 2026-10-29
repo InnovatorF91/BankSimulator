@@ -21,7 +21,6 @@ namespace ServerProject.Repositories
 		/// <param name="status">新的卡片狀態</param>
 		/// <param name="deactivatedAt">卡片被停用的時間</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
 		public async Task<int> DeactivateAllCards(long accountId, CardStatus status, DateTime deactivatedAt, DateTime updatedAt)
         {
             var sql = LoadSql("Card.DeactivateAllCards");
@@ -87,7 +86,6 @@ namespace ServerProject.Repositories
 		/// <param name="cardId">卡片ID</param>
 		/// <param name="newPINHash">新的PIN哈希</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
 		public async Task<int> UpdateCardPIN(long cardId, string newPINHash, DateTime updatedAt)
         {
             var sql = LoadSql("Card.UpdateCardPIN");
@@ -103,21 +101,18 @@ namespace ServerProject.Repositories
 		/// 更新卡片狀態
 		/// </summary>
 		/// <param name="cardId">卡片ID</param>
-		/// <param name="status">新的卡片狀態</param>
-		/// <param name="deactivatedAt">卡片被停用的時間</param>
-		/// <param name="replacedBy">更換的新卡ID</param>
+		/// <param name="currentStatus">當前卡片狀態</param>
+		/// <param name="newStatus">新的卡片狀態</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
-		public async Task<int> UpdateCardStatus(long cardId, CardStatus status, DateTime updatedAt, DateTime? deactivatedAt = null, long? replacedBy = null)
+		public async Task<int> UpdateCardStatusIfCurrentStatus(long cardId,CardStatus currentStatus,CardStatus newStatus,DateTime updatedAt)
         {
-            var sql = LoadSql("Card.UpdateCardStatus");
+            var sql = LoadSql("Card.UpdateCardStatusIfCurrentStatus");
             return await _dataAccess.DbConnection.ExecuteAsync(sql, new
             {
-                CardId = cardId,
-                Status = status,
-                DeactivatedAt = deactivatedAt,
-                ReplacedBy = replacedBy,
-                UpdatedAt = updatedAt
+				CardId = cardId,
+				CurrentStatus = currentStatus,
+				NewStatus = newStatus,
+				UpdatedAt = updatedAt
 			}, _dataAccess.DbTransaction);
 		}
 
@@ -128,7 +123,6 @@ namespace ServerProject.Repositories
 		/// <param name="newFailCount">新的失敗次數</param>
 		/// <param name="lockedUntil">鎖定到期時間（如果有的話）</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
 		public async Task<int> UpdatePINFailCount(long cardId, short newFailCount,DateTime updatedAt, DateTime? lockedUntil = null)
         {
             var sql = LoadSql("Card.UpdateCardPINFailCount");
@@ -140,7 +134,19 @@ namespace ServerProject.Repositories
                 UpdatedAt = updatedAt
 			}, _dataAccess.DbTransaction);
 		}
-    }
+
+		/// <summary>
+		/// 获取卡片信息用于更新操作（带锁）
+		/// </summary>
+		/// <param name="cardId">卡片ID</param>
+		/// <returns>卡片模型</returns>
+		public async Task<CardEntity?> GetCardByIdForUpdate(long cardId)
+		{
+			var sql = LoadSql("Card.GetCardByIdForUpdate");
+			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CardEntity>(sql, new { CardId = cardId }, _dataAccess.DbTransaction);
+
+		}
+	}
 
     /// <summary>
     /// 卡片服務接口
@@ -177,12 +183,10 @@ namespace ServerProject.Repositories
 		/// 更新卡片狀態
 		/// </summary>
 		/// <param name="cardId">卡片ID</param>
-		/// <param name="status">新的卡片狀態</param>
-		/// <param name="deactivatedAt">卡片被停用的時間</param>
-		/// <param name="replacedBy">更換的新卡ID</param>
+		/// <param name="currentStatus">當前卡片狀態</param>
+		/// <param name="newStatus">新的卡片狀態</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
-		Task<int> UpdateCardStatus(long cardId, CardStatus status, DateTime updatedAt, DateTime? deactivatedAt = null, long? replacedBy = null);
+		Task<int> UpdateCardStatusIfCurrentStatus(long cardId, CardStatus currentStatus, CardStatus newStatus, DateTime updatedAt);
 
 		/// <summary>
 		/// 更新卡片PIN碼
@@ -190,7 +194,6 @@ namespace ServerProject.Repositories
 		/// <param name="cardId">卡片ID</param>
 		/// <param name="newPINHash">新的PIN哈希</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
 		Task<int> UpdateCardPIN(long cardId, string newPINHash, DateTime updatedAt);
 
 		/// <summary>
@@ -200,7 +203,6 @@ namespace ServerProject.Repositories
 		/// <param name="newFailCount">新的失敗次數</param>
 		/// <param name="lockedUntil">鎖定到期時間（如果有的話）</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
 		Task<int> UpdatePINFailCount(long cardId, short newFailCount, DateTime updatedAt, DateTime? lockedUntil = null);
 
 		/// <summary>
@@ -210,14 +212,19 @@ namespace ServerProject.Repositories
 		/// <param name="status">新的卡片狀態</param>
 		/// <param name="deactivatedAt">卡片被停用的時間</param>
 		/// <param name="updatedAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
 		Task<int> DeactivateAllCards(long accountId, CardStatus status, DateTime deactivatedAt ,DateTime updatedAt);
 
 		/// <summary>
 		/// 获取账户下 Active 状态的卡片数量
 		/// </summary>
 		/// <param name="accountId">账户ID</param>
-		/// <returns>Active 状态的卡片数量</returns>
 		Task<int> CountActiveCards(long accountId);
-    }
+
+		/// <summary>
+		/// 获取卡片信息用于更新操作（带锁）
+		/// </summary>
+		/// <param name="cardId">卡片ID</param>
+		/// <returns>卡片模型</returns>
+		Task<CardEntity?> GetCardByIdForUpdate(long cardId);
+	}
 }
