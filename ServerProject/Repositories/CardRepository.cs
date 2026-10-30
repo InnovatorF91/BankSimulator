@@ -62,11 +62,15 @@ namespace ServerProject.Repositories
 		/// 获取账户下 Active 状态的卡片数量
 		/// </summary>
 		/// <param name="accountId">账户ID</param>
-		/// <returns>Active 状态的卡片数量</returns>
-		public async Task<int> CountActiveCards(long accountId)
+		/// <param name="cardType">卡片类型</param>
+		/// <param name="currentYear">当前年份</param>
+		/// <param name="currentMonth">当前月份</param>
+		/// <returns>卡片数量</returns>
+		public async Task<int> CountUsableCardsByAccountIdAndType(long accountId,CardType cardType,short currentYear,short currentMonth)
         {
-            var sql = LoadSql("Card.CountActiveCards");
-            return await _dataAccess.DbConnection.ExecuteScalarAsync<int>(sql, new { AccountId = accountId }, _dataAccess.DbTransaction);
+            var sql = LoadSql("Card.CountUsableCardsByAccountIdAndType");
+            return await _dataAccess.DbConnection.ExecuteScalarAsync<int>(sql, new { AccountId = accountId, CardType = cardType, CurrentYear = currentYear, CurrentMonth = currentMonth,ActiveStatus = CardStatus.Active,BlockedStatus = CardStatus.Blocked
+			}, _dataAccess.DbTransaction);
 		}
 
         /// <summary>
@@ -218,7 +222,11 @@ namespace ServerProject.Repositories
 		/// 获取账户下 Active 状态的卡片数量
 		/// </summary>
 		/// <param name="accountId">账户ID</param>
-		Task<int> CountActiveCards(long accountId);
+		/// <param name="cardType">卡片类型</param>
+		/// <param name="currentYear">当前年份</param>
+		/// <param name="currentMonth">当前月份</param>
+		/// <returns>卡片数量</returns>
+		Task<int> CountUsableCardsByAccountIdAndType(long accountId,CardType cardType,short currentYear,short currentMonth);
 
 		/// <summary>
 		/// 获取卡片信息用于更新操作（带锁）

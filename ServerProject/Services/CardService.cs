@@ -39,13 +39,25 @@ namespace ServerProject.Services
 		/// </summary>
 		private readonly ICardRepository _cardRepository;
 
+		/// <summary>
+		/// 卡号生成实例，用于生成卡号
+		/// </summary>
+		private readonly ICardNumberGenerator _cardNumberGenerator;
+
+		/// <summary>
+		/// 加密服務實例，用於處理加密相關的操作
+		/// </summary>
+		private readonly ICryptoRepository _cryptoRepository;
+
 		public CardService(IConnectionFactory connectionFactory,
 			IAccountRepository accountRepository,
 			ICustomerRepository customerRepository,
 			ITransactionRepository transactionRepository,
 			ITimeProvider timeProvider,
 			ICurrentCustomer currentCustomer,
-			ICardRepository cardRepository) : base(connectionFactory)
+			ICardRepository cardRepository,
+			ICryptoRepository cryptoRepository,
+			ICardNumberGenerator cardNumberGenerator) : base(connectionFactory)
 		{
 			_accountRepository = accountRepository;
 			_customerRepository = customerRepository;
@@ -53,6 +65,8 @@ namespace ServerProject.Services
 			_timeProvider = timeProvider;
 			_currentCustomer = currentCustomer;
 			_cardRepository = cardRepository;
+			_cryptoRepository = cryptoRepository;
+			_cardNumberGenerator = cardNumberGenerator;
 		}
 
 		/// <summary>
@@ -133,7 +147,7 @@ namespace ServerProject.Services
 						// 驗證帳戶是否存在且屬於當前客戶
 						if (account == null || account.CustomerId != customerId)
 						{
-							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
 						}
 
 						// 验证账户状态是否为关闭，如果是，则返回账户已关闭错误
@@ -311,6 +325,169 @@ namespace ServerProject.Services
 		}
 
 		/// <summary>
+		/// 發行卡片
+		/// </summary>
+		/// <param name="request">發行卡片請求資料傳輸物件</param>
+		/// <returns>發行卡片結果資料傳輸物件</returns>
+		public async Task<IssueCardResultDto> IssueCard(IssueCardRequest request)
+		{
+			//Request 非空。
+			if (request == null)
+			{
+				return IssueCardResultDto.Failure((int)CardErrorCode.ValidationFailed, "Request cannot be null.");
+			}
+
+			//AccountId > 0。
+			if (request.AccountId <= 0)
+			{
+				return IssueCardResultDto.Failure((int)CardErrorCode.ValidationFailed, "AccountId must be greater than 0.");
+			}
+
+			//CardType 是已定义枚举值。
+			if (!Enum.IsDefined(typeof(CardType), request.CardType))
+			{
+				return IssueCardResultDto.Failure((int)CardErrorCode.InvalidCardType, "Invalid CardType.");
+			}
+
+			//PIN 恰好四位，而且每位都在 '0'～`'9'` 之间。
+			if (string.IsNullOrWhiteSpace(request.PIN) || request.PIN.Length != 4 || !request.PIN.All(c => c >= '0' && c <= '9'))
+			{
+				return IssueCardResultDto.Failure((int)CardErrorCode.InvalidPIN, "PIN must be exactly 4 digits.");
+			}
+
+			//获取当前客户 ID。
+			int customerId;
+			try
+			{
+				customerId = _currentCustomer.CustomerId;
+			}
+			catch (InvalidOperationException)
+			{
+				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
+				return IssueCardResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
+			}
+
+			try
+			{
+				// 确认客户存在、未被删除。
+				var customer = await ExecuteDbAsync<CustomerEntity?>(
+					async dataAccess =>
+					{
+						_customerRepository.DataAccess = dataAccess;
+						return await _customerRepository.GetCustomerById(customerId);
+					}
+				);
+				if (customer == null)
+				{
+					return IssueCardResultDto.Failure((int)CustomerErrorCode.CustomerNotFound, "The customer does not exist.");
+				}
+				if (customer.IsDeleted)
+				{
+					return IssueCardResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData, "The customer has been deleted.");
+				}
+
+				// 计算PIN的哈希值。
+				var pinHash = _cryptoRepository.Hash(request.PIN,HashProfile.CardPIN);
+
+				// 进入事务，执行发卡操作。
+				var result = await ExecuteInTxAsync<IssueCardResultDto>(
+					async dataAccess =>
+					{
+						_accountRepository.DataAccess = dataAccess;
+						_cardRepository.DataAccess = dataAccess;
+						// 确认账户存在、属于当前客户、未关闭。
+						var account = await _accountRepository.GetAccountByIdAndCustomerIdForUpdate(request.AccountId, customerId);
+						if (account == null || account.CustomerId != customerId)
+						{
+							return IssueCardResultDto.Failure((int)AccountErrorCode.AccountAccessDenied, "The account does not exist or access is denied.");
+						}
+						if (account.Status != AccountStatus.Active)
+						{
+							return IssueCardResultDto.Failure((int)AccountErrorCode.AccountNotAvailable,"The account is not available for card issuance.");
+						}
+
+						// 取得当前时间
+						var now = _timeProvider.Now();
+
+						// 检查是否存在同类型未过期的 Active／Blocked 卡
+						var count = await _cardRepository.CountUsableCardsByAccountIdAndType(account.AccountId,request.CardType,(short)now.Year,(short)now.Month);
+						if (count > 0)
+						{
+							return IssueCardResultDto.Failure((int)CardErrorCode.CardAlreadyExists,"An unexpired card of this type already exists.");
+						}
+
+						// 生成卡片过期年月
+						var expiry = now.AddYears(3);
+
+						// 生成卡号
+						var cardNumber = _cardNumberGenerator.Generate();
+
+						// 对卡片数据进行构造
+						var card = new CardEntity
+						{
+							AccountId = account.AccountId,
+							CardNumber = cardNumber,
+
+							ExpiryYear = (short)expiry.Year,
+							ExpiryMonth = (short)expiry.Month,
+
+							PINHash = pinHash,
+							PINFailCount = 0,
+							PINLockedUntil = null,
+
+							CardType = request.CardType,
+							Status = CardStatus.Active,
+
+							DeactivatedAt = null,
+							ReplacedBy = null,
+
+							CreatedAt = now,
+							UpdatedAt = now
+						};
+
+						var cardId = await _cardRepository.InsertNewCard(card);
+
+						// 如果返回的卡片ID不大于0，则抛出异常
+						if (cardId <= 0)
+						{
+							throw new CardOperationException(CardErrorCode.CardCreationFailed,"Failed to create the card.");
+						}
+						card.CardId = cardId;
+
+						// 将卡片实体转换为DTO
+						var cardDto = new CardDto()
+						{
+							CardId = card.CardId,
+							AccountId = card.AccountId,
+							MaskedCardNumber = MaskCardNumber(card.CardNumber),
+							ExpiryYear = card.ExpiryYear,
+							ExpiryMonth = card.ExpiryMonth,
+							CardType = card.CardType,
+							Status = card.Status
+						};
+
+						return IssueCardResultDto.SuccessDto(cardDto);
+					});
+
+				return result;
+			}
+			catch (CardNumberConflictException)
+			{
+				return IssueCardResultDto.Failure((int)CardErrorCode.CardNumberConflict,"The generated card number already exists.");
+			}
+			catch (CardOperationException ex)
+			{
+				//发生异常则 Rollback
+				return IssueCardResultDto.Failure((int)ex.ErrorCode, ex.Message);
+			}
+			catch (UnableToOperateDBException)
+			{
+				//发生异常则 Rollback
+				return IssueCardResultDto.Failure((int)CardErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
+			}
+		}
+
+		/// <summary>
 		/// 遮蔽卡片號碼，只顯示最後四位數字
 		/// </summary>
 		/// <param name="cardNumber">卡片號碼</param>
@@ -342,5 +519,12 @@ namespace ServerProject.Services
 		/// <param name="request">封鎖卡片請求資料傳輸物件</param>
 		/// <returns>封鎖卡片結果資料傳輸物件</returns>
 		Task<BlockCardResultDto> BlockCard(BlockCardRequest request);
+
+		/// <summary>
+		/// 發行卡片
+		/// </summary>
+		/// <param name="request">發行卡片請求資料傳輸物件</param>
+		/// <returns>發行卡片結果資料傳輸物件</returns>
+		Task<IssueCardResultDto> IssueCard(IssueCardRequest request);
 	}
 }

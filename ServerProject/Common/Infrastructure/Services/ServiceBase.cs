@@ -83,6 +83,18 @@ namespace ServerProject.Common
 					$"{operationName} failed due to a database deadlock.",
 					ex);
 			}
+			catch (PostgresException ex)
+			    when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == "uk_card_number")
+			{
+				if (da != null)
+				{
+					TryRollback(da);
+				}
+
+				throw new CardNumberConflictException(
+					"The generated card number already exists.",
+					ex);
+			}
 			catch (DbException ex)
 			{
 				if (da != null)

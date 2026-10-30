@@ -33,6 +33,7 @@ namespace ServerProject
 			builder.Services.AddSingleton<IJwtProvider, JwtProvider>();
 			builder.Services.AddSingleton<ISessionOption, SessionOption>();
 			builder.Services.AddSingleton<IPasswordValidator, PasswordValidator>();
+			builder.Services.AddSingleton<ICardNumberGenerator,CardNumberGenerator>();
 
 			builder.Services.Configure<SmtpOption>(
 				builder.Configuration.GetSection("SmtpOption"));
