@@ -49,6 +49,16 @@ namespace ServerProject.Services
 		/// </summary>
 		private readonly ICryptoRepository _cryptoRepository;
 
+		/// <summary>
+		/// 连续验证失败次数，最多允许3次
+		/// </summary>
+		private const int MaxPinFailures = 3;
+
+		/// <summary>
+		/// Pin锁定时间，3次验证失败后，锁定15分钟
+		/// </summary>
+		private const int PinLockMinutes = 15;
+
 		public CardService(IConnectionFactory connectionFactory,
 			IAccountRepository accountRepository,
 			ICustomerRepository customerRepository,
@@ -133,8 +143,6 @@ namespace ServerProject.Services
 					return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
 				}
 
-
-
 				var result = await ExecuteInTxAsync<BlockCardResultDto>(
 					async dataAccess =>
 					{
@@ -157,50 +165,50 @@ namespace ServerProject.Services
 						}
 
 						// 重新获取卡片信息以进行更新操作
-						var card2 = await _cardRepository.GetCardByIdForUpdate(request.CardId);
+						var lockedCard = await _cardRepository.GetCardByIdForUpdate(request.CardId);
 
 						// 取得當前時間
-						var now = _timeProvider.Now();
+						var now = _timeProvider.UtcNow();
 
 						// 验证卡片是否存在
-						if (card2 == null)
+						if (lockedCard == null)
 						{
 							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
 						}
 
 						// 验证卡片是否属于当前客户的账户
-						if (card2.AccountId != account.AccountId)
+						if (lockedCard.AccountId != account.AccountId)
 						{
 							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not belong to the account.");
 						}
 
 						// 验证卡片状态是否已经被封锁，如果是，则直接返回成功结果
-						if (card2.Status == CardStatus.Blocked)
+						if (lockedCard.Status == CardStatus.Blocked)
 						{
-							return BlockCardResultDto.SuccessDto(card2.CardId,CardStatus.Blocked);
+							return BlockCardResultDto.SuccessDto(lockedCard.CardId,CardStatus.Blocked);
 						}
 
 						// 验证卡片是否已过期
-						if (card2.Status == CardStatus.Expired)
+						if (lockedCard.Status == CardStatus.Expired)
 						{
 							return BlockCardResultDto.Fail((int)CardErrorCode.CardExpired, "The card has expired.");
 						}
 
 						// 验证卡片状态是否允许操作
-						if (card2.Status != CardStatus.Active)
+						if (lockedCard.Status != CardStatus.Active)
 						{
 							return BlockCardResultDto.Fail((int)CardErrorCode.CardStatusInvalid, "The card status does not allow this operation.");
 						}
 
 						// 验证卡片是否已过期
-						var expired = card2.ExpiryYear < now.Year || (card2.ExpiryYear == now.Year && card2.ExpiryMonth < now.Month);
+						var expired = lockedCard.ExpiryYear < now.Year || (lockedCard.ExpiryYear == now.Year && lockedCard.ExpiryMonth < now.Month);
 						if (expired)
 						{
 							return BlockCardResultDto.Fail((int)CardErrorCode.CardExpired, "The card has expired.");
 						}
 
 						// 更新卡片状态为封锁
-						var affectedRows = await _cardRepository.UpdateCardStatusIfCurrentStatus(card2.CardId, CardStatus.Active, CardStatus.Blocked, now);
+						var affectedRows = await _cardRepository.UpdateCardStatusIfCurrentStatus(lockedCard.CardId, CardStatus.Active, CardStatus.Blocked, now);
 
 						// 如果更新失败，说明卡片状态已发生变化，返回冲突错误
 						if (affectedRows == 0)
@@ -209,7 +217,7 @@ namespace ServerProject.Services
 						}
 
 						// 返回成功结果
-						return BlockCardResultDto.SuccessDto(card2.CardId, CardStatus.Blocked);
+						return BlockCardResultDto.SuccessDto(lockedCard.CardId, CardStatus.Blocked);
 					}
 				);
 
@@ -407,7 +415,7 @@ namespace ServerProject.Services
 						}
 
 						// 取得当前时间
-						var now = _timeProvider.Now();
+						var now = _timeProvider.UtcNow();
 
 						// 检查是否存在同类型未过期的 Active／Blocked 卡
 						var count = await _cardRepository.CountUsableCardsByAccountIdAndType(account.AccountId,request.CardType,(short)now.Year,(short)now.Month);
@@ -488,6 +496,209 @@ namespace ServerProject.Services
 		}
 
 		/// <summary>
+		/// 修改卡片PIN值
+		/// </summary>
+		/// <param name="request">修改卡片的请求资料传输物件</param>
+		/// <returns>修改卡片PIN的结果Dto</returns>
+		public async Task<ChangeCardPinResultDto> ChangeCardPin(ChangeCardPinRequest request)
+		{
+			// Request 非空，`CardId > 0`。
+			if (request == null)
+			{
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.ValidationFailed, "Request cannot be null.");
+			}
+			if (request.CardId <= 0)
+			{
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.ValidationFailed,"CardId must be greater than 0.");
+			}
+			// CurrentPIN、`NewPIN` 均为四位数字。
+			if (string.IsNullOrWhiteSpace(request.CurrentPIN) || request.CurrentPIN.Length != 4 || !request.CurrentPIN.All(c => c >= '0' && c <= '9'))
+			{
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.InvalidPIN,"Current PIN must be exactly 4 digits.");
+			}
+			if (string.IsNullOrWhiteSpace(request.NewPIN) || request.NewPIN.Length != 4 || !request.NewPIN.All(c => c >= '0' && c <= '9'))
+			{
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.InvalidPIN,"New PIN must be exactly 4 digits.");
+			}
+
+			//获取当前客户 ID。
+			int customerId;
+			try
+			{
+				customerId = _currentCustomer.CustomerId;
+			}
+			catch (InvalidOperationException)
+			{
+				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
+				return ChangeCardPinResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
+			}
+
+			try
+			{
+				// 确认客户存在、未被删除。
+				var customer = await ExecuteDbAsync<CustomerEntity?>(
+					async dataAccess =>
+					{
+						_customerRepository.DataAccess = dataAccess;
+						return await _customerRepository.GetCustomerById(customerId);
+					}
+				);
+				if (customer == null)
+				{
+					return ChangeCardPinResultDto.Failure((int)CustomerErrorCode.CustomerNotFound, "The customer does not exist.");
+				}
+				if (customer.IsDeleted)
+				{
+					return ChangeCardPinResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData, "The customer has been deleted.");
+				}
+
+				// 使用 GetCardById 查询卡片
+				var card = await ExecuteDbAsync<CardEntity?>(async dataAccess =>
+				{
+					_cardRepository.DataAccess = dataAccess;
+					return await _cardRepository.GetCardById(request.CardId);
+				});
+
+				// 如果卡片内容为空，则返回未找到卡片或访问被拒绝。
+				if (card == null)
+				{
+					return ChangeCardPinResultDto.Failure(
+						(int)CardErrorCode.CardNotFoundOrAccessDenied,
+						"The card does not exist or access is denied.");
+				}
+
+				var result = await ExecuteInTxAsync<ChangeCardPinResultDto>(
+					async dataAccess =>
+					{
+						_accountRepository.DataAccess = dataAccess;
+						_cardRepository.DataAccess = dataAccess;
+
+						// 确认账户存在、属于当前客户、未关闭。
+						var account = await _accountRepository.GetAccountByIdAndCustomerIdForUpdate(card.AccountId, customerId);
+						if (account == null || account.CustomerId != customerId)
+						{
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
+						}
+						if (account.Status != AccountStatus.Active)
+						{
+							return ChangeCardPinResultDto.Failure((int)AccountErrorCode.AccountNotAvailable, "The account is not available for PIN changes.");
+						}
+
+						// 重新读取并锁定卡片。
+						var lockedCard = await _cardRepository.GetCardByIdForUpdate(request.CardId);
+
+						// 卡片不存在，或已不属于刚才锁定的账户。
+						if (lockedCard == null || lockedCard.AccountId != account.AccountId)
+						{
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
+						}
+
+						// 卡片已标记为过期。
+						if (lockedCard.Status == CardStatus.Expired)
+						{
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardExpired,"The card has expired.");
+						}
+
+						// 只有 Active 卡片允许修改 PIN。
+						if (lockedCard.Status != CardStatus.Active)
+						{
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardStatusInvalid,"The card status does not allow PIN changes.");
+						}
+
+						var now = _timeProvider.UtcNow();
+
+						// 状态仍为 Active，但实际有效期已经过去。
+						var expired = lockedCard.ExpiryYear < now.Year || (lockedCard.ExpiryYear == now.Year && lockedCard.ExpiryMonth < now.Month);
+						if (expired)
+						{
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardExpired,"The card has expired.");
+						}
+
+						// 检查临时锁定
+						if (lockedCard.PINLockedUntil.HasValue && lockedCard.PINLockedUntil.Value > now)
+						{
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.PINLocked,"PIN verification is temporarily locked.");
+						}
+
+						// 确定本轮已有失败次数。
+						// 有锁定时间但走到这里，说明锁定已经到期，从0重新计算。
+						// 没有锁定时间，则继续累计已有失败次数。
+						var failCount = lockedCard.PINLockedUntil.HasValue ? 0 : (int)lockedCard.PINFailCount;
+
+						// 验证旧PIN：第一个参数为哈希，第二个参数为用户输入。
+						var verified = _cryptoRepository.Verify(lockedCard.PINHash,request.CurrentPIN);
+
+						// 旧PIN错误，更新失败次数及锁定时间。
+						if (!verified)
+						{
+							var newFailCount = (short)Math.Min(failCount + 1,MaxPinFailures);
+
+							DateTime? lockedUntil = newFailCount >= MaxPinFailures ? now.AddMinutes(PinLockMinutes) : null;
+
+							var affectedRows = await _cardRepository.UpdatePINFailCount(lockedCard.CardId,newFailCount,now,lockedUntil);
+
+							// 保存失败则抛出异常，由ServiceBase回滚事务。
+							if (affectedRows != 1)
+							{
+								throw new CardOperationException(CardErrorCode.PINUpdateFailed,"Failed to update PIN verification data.");
+							}
+
+							// 达到失败次数上限，返回锁定错误。
+							if (lockedUntil.HasValue)
+							{
+								return ChangeCardPinResultDto.Failure((int)CardErrorCode.PINLocked,"PIN verification is temporarily locked.");
+							}
+
+							// 未达到上限，返回旧PIN错误。
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CurrentPINIncorrect,"The current PIN is incorrect.");
+						}
+
+						// 旧PIN验证成功，清零失败次数和锁定时间。
+						var resetRows = await _cardRepository.UpdatePINFailCount(lockedCard.CardId,0,now,null);
+
+						if (resetRows != 1)
+						{
+							throw new CardOperationException(CardErrorCode.PINUpdateFailed,"Failed to reset PIN verification data.");
+						}
+
+						// 新旧PIN相同，不修改PIN。
+						// 正常返回，让事务提交前面的失败次数重置。
+						if (request.CurrentPIN == request.NewPIN)
+						{
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.NewPINUnchanged,"The new PIN must differ from the current PIN.");
+						}
+
+						// 生成新PIN的哈希。
+						var newHash = _cryptoRepository.Hash(request.NewPIN,HashProfile.CardPIN);
+
+						// 更新PIN哈希。
+						var updatedRows = await _cardRepository.UpdateCardPIN(lockedCard.CardId,newHash,now);
+
+						if (updatedRows != 1)
+						{
+							// 抛出异常，PIN更新与前面的失败次数重置一起回滚。
+							throw new CardOperationException(CardErrorCode.PINUpdateFailed,"Failed to update the card PIN.");
+						}
+
+						// 返回成功，由ExecuteInTxAsync提交事务。
+						return ChangeCardPinResultDto.SuccessDto(lockedCard.CardId);
+					});
+
+				return result;
+			}
+			catch (CardOperationException ex)
+			{
+				//发生异常则 Rollback
+				return ChangeCardPinResultDto.Failure((int)ex.ErrorCode, ex.Message);
+			}
+			catch (UnableToOperateDBException)
+			{
+				//发生异常则 Rollback
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
+			}
+		}
+
+		/// <summary>
 		/// 遮蔽卡片號碼，只顯示最後四位數字
 		/// </summary>
 		/// <param name="cardNumber">卡片號碼</param>
@@ -501,7 +712,6 @@ namespace ServerProject.Services
 
 			return $"****{cardNumber[^4..]}";
 		}
-
 	}
 
 	public interface ICardService
@@ -526,5 +736,12 @@ namespace ServerProject.Services
 		/// <param name="request">發行卡片請求資料傳輸物件</param>
 		/// <returns>發行卡片結果資料傳輸物件</returns>
 		Task<IssueCardResultDto> IssueCard(IssueCardRequest request);
+
+		/// <summary>
+		/// 修改卡片PIN值
+		/// </summary>
+		/// <param name="request">修改卡片的请求资料传输物件</param>
+		/// <returns>修改卡片PIN的结果Dto</returns>
+		Task<ChangeCardPinResultDto> ChangeCardPin(ChangeCardPinRequest request);
 	}
 }
