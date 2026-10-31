@@ -180,7 +180,7 @@ namespace ServerProject.Services
 				}
 
 				// 獲取當前時間，用於設置客戶的創建和更新時間
-				var now = _timeProvider.UtcNow();
+				var now = _timeProvider.Now();
 
 				// 創建新的客戶實體，並將註冊請求中的信息填充到客戶實體中
 				var newCustomer = new CustomerEntity()
@@ -282,7 +282,7 @@ namespace ServerProject.Services
 				// TODO: 如果客户的所有账户中还有账户的状态为“啟用”，或者客户的所有交易中还有交易的状态为“待處理”，则不允许删除客户账户，并返回错误信息，返回“未經授權的訪問”
 
 				// 獲取當前時間，用於設置客戶的刪除時間
-				var now = _timeProvider.UtcNow();
+				var now = _timeProvider.Now();
 
 				// 在一個事務中同時刪除客戶和相關的認證信息，確保數據的一致性
 				var isRemoved = await ExecuteInTxAsync<int>(
@@ -324,7 +324,7 @@ namespace ServerProject.Services
 		public async Task<UpdateBasicProfileResultDto> UpdateBasicProfile(UpdateBasicProfileRequest request)
 		{
 			// 獲取當前時間，用於設置客戶的更新時間
-			var now = _timeProvider.UtcNow();
+			var now = _timeProvider.Now();
 
 			// 驗證更新請求中客戶ID是否有效，如果無效則返回錯誤信息
 			if (request.Id <= 0)
@@ -476,7 +476,7 @@ namespace ServerProject.Services
 				}
 
 				// 獲取當前時間，用於設置客戶的更新時間
-				var now = _timeProvider.UtcNow();
+				var now = _timeProvider.Now();
 
 				// 在一個事務中更新客戶的聯繫信息，確保數據的一致性
 				var isUpdated = await ExecuteInTxAsync<int>(
@@ -592,7 +592,7 @@ namespace ServerProject.Services
 				}
 
 				// 獲取當前時間，用於設置客戶的更新時間
-				var now = _timeProvider.UtcNow();
+				var now = _timeProvider.Now();
 
 				// 在一個事務中更新客戶的身份證明文件信息，確保數據的一致性
 				var isUpdated = await ExecuteInTxAsync<int>(
@@ -681,7 +681,7 @@ namespace ServerProject.Services
 				}
 
 				// 獲取當前時間，用於設置客戶的更新時間
-				var now = _timeProvider.UtcNow();
+				var now = _timeProvider.Now();
 
 				// 在一個事務中更新客戶的KYC狀態，確保數據的一致性
 				var isUpdated = await ExecuteInTxAsync<int>(

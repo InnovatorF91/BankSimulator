@@ -6,15 +6,6 @@
     public class SystemClock : ITimeProvider
     {
         /// <summary>
-        /// 獲取當前UTC時間
-        /// </summary>
-        /// <returns>UTC時間</returns>
-        public DateTime UtcNow()
-        {
-            return DateTime.UtcNow;
-        }
-
-        /// <summary>
         /// 獲取當前本地時間（不包含時間部分）
         /// </summary>
         /// <returns>本地時間（不包含時間部分）</returns>
@@ -23,13 +14,13 @@
             return DateTime.Today;
         }
 
-        /// <summary>
-        /// 獲取當前本地時間
-        /// </summary>
-        /// <returns>本地時間</returns>
-        public DateTime Now()
+		/// <summary>
+		/// 獲取當前時間（UTC）
+		/// </summary>
+		/// <returns>時間（UTC）</returns>
+		public DateTime Now()
         {
-            return DateTime.Now;
-        }
+            return DateTime.UtcNow;
+		}
     }
 }

@@ -24,23 +24,17 @@
                 : DateTime.UtcNow;
         }
 
-        /// <summary>
-        /// 現在的UTC時間
-        /// </summary>
-        /// <returns>UTC時間</returns>
-        public DateTime UtcNow() => _nowUtc;
+		/// <summary>
+		/// 獲取當前時間（UTC）
+		/// </summary>
+		/// <returns>時間（UTC）</returns>
+		public DateTime Now() => _nowUtc;
 
-        /// <summary>
-        /// 現在的本地時間
-        /// </summary>
-        /// <returns>本地時間</returns>
-        public DateTime Now() => _nowUtc.ToLocalTime();
-
-        /// <summary>
-        /// 今天的本地日期（不包含時間部分）
-        /// </summary>
-        /// <returns>本地日期（不包含時間部分）</returns>
-        public DateTime Today()
+		/// <summary>
+		/// 今天的本地日期（不包含時間部分）
+		/// </summary>
+		/// <returns>本地日期（不包含時間部分）</returns>
+		public DateTime Today()
         {
             var local = _nowUtc.ToLocalTime();
             return new DateTime(local.Year, local.Month, local.Day);

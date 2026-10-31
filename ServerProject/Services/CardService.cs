@@ -168,7 +168,7 @@ namespace ServerProject.Services
 						var lockedCard = await _cardRepository.GetCardByIdForUpdate(request.CardId);
 
 						// 取得當前時間
-						var now = _timeProvider.UtcNow();
+						var now = _timeProvider.Now();
 
 						// 验证卡片是否存在
 						if (lockedCard == null)
@@ -415,7 +415,7 @@ namespace ServerProject.Services
 						}
 
 						// 取得当前时间
-						var now = _timeProvider.UtcNow();
+						var now = _timeProvider.Now();
 
 						// 检查是否存在同类型未过期的 Active／Blocked 卡
 						var count = await _cardRepository.CountUsableCardsByAccountIdAndType(account.AccountId,request.CardType,(short)now.Year,(short)now.Month);
@@ -605,7 +605,7 @@ namespace ServerProject.Services
 							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardStatusInvalid,"The card status does not allow PIN changes.");
 						}
 
-						var now = _timeProvider.UtcNow();
+						var now = _timeProvider.Now();
 
 						// 状态仍为 Active，但实际有效期已经过去。
 						var expired = lockedCard.ExpiryYear < now.Year || (lockedCard.ExpiryYear == now.Year && lockedCard.ExpiryMonth < now.Month);
