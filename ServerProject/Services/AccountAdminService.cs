@@ -20,6 +20,11 @@ namespace ServerProject.Services
 		private readonly ICustomerRepository _customerRepository;
 
 		/// <summary>
+		/// 卡片服務實例，用於處理卡片相關的操作
+		/// </summary>
+		private readonly ICardRepository _cardRepository;
+
+		/// <summary>
 		/// 時間提供者實例，用於獲取當前時間
 		/// </summary>
 		private readonly ITimeProvider _timeProvider;
@@ -36,12 +41,14 @@ namespace ServerProject.Services
 			IConnectionFactory connectionFactory,
 			IAccountRepository accountRepository,
 			ICustomerRepository customerRepository,
-			ITimeProvider timeProvider
+			ITimeProvider timeProvider,
+			ICardRepository cardRepository
 		) : base(connectionFactory)
 		{
 			_accountRepository = accountRepository;
 			_customerRepository = customerRepository;
 			_timeProvider = timeProvider;
+			_cardRepository = cardRepository;
 		}
 
 		/// <summary>
@@ -115,24 +122,34 @@ namespace ServerProject.Services
 
 				var now = _timeProvider.Now();
 
-				// 执行更新账户状态和插入操作日志操作
+				// 关闭账户、停用卡片并记录操作，统一提交或回滚。
 				var count = await ExecuteInTxAsync<int>(
 					async dataAccess =>
 					{
 						_accountRepository.DataAccess = dataAccess;
+						_cardRepository.DataAccess = dataAccess;
 
-						var updateCount = await _accountRepository.UpdateAccountStatusIfCurrentStatus(
-							account.AccountId,
-							account.CustomerId,
-							account.Status,
-							AccountStatus.Closed,
-							now,
-							requireZeroBalance: true);
+						var updateCount =
+							await _accountRepository.UpdateAccountStatusIfCurrentStatus(
+								account.AccountId,
+								account.CustomerId,
+								account.Status,
+								AccountStatus.Closed,
+								now,
+								requireZeroBalance: true);
 
 						if (updateCount <= 0)
 						{
 							return 0;
 						}
+
+						// 停用该账户下的卡片。
+						// 没有卡片或卡片已经停用时，返回 0 也属于正常情况。
+						_ = await _cardRepository.DeactivateAllCards(
+							account.AccountId,
+							CardStatus.Inactive,
+							now,
+							now);
 
 						await _accountRepository.InsertAccountOperationLog(
 							new AccountOperationLogEntity
@@ -148,8 +165,7 @@ namespace ServerProject.Services
 							});
 
 						return updateCount;
-					},
-					"ForceCloseAccount");
+					});
 
 				// 如果操作数为0，则返回失败Dto
 				if (count <= 0)

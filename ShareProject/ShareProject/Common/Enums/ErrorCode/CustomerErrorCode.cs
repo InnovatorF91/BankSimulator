@@ -11,5 +11,6 @@
 		CustomerUpdateFailed = 1007, // 客戶更新失敗
 		CustomerDeletionFailed = 1008, // 客戶刪除失敗
 		UnableToOperateDb = 1009, // 無法操作資料庫
+		CustomerHasNonClosedAccounts = 1010, // 客户仍有未关闭的账户
 	}
 }

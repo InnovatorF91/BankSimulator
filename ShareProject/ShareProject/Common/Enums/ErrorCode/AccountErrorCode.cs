@@ -14,6 +14,8 @@
 		AccountOperationLogNotFound = 1010,// 无法找到账户操作日志
 		UnableToOperateDb = 1099,      // 無法操作資料庫
 		InvalidInitialDepositAmount = 1100, // 無效的初始存款金額
+		AccountCreationFailed = 1101,       // 创建账户失败
+		InitialDepositFailed = 1102,        // 初始存款失败
 		ValidationFailed = 2000, // 通用验证失败
 	}
 }

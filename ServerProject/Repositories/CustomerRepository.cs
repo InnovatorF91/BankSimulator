@@ -138,6 +138,22 @@ namespace ServerProject.Repositories
 
 			return _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, IsDeleted = isDeleted, DeletedReason = deletedReason, DeletedAt = deletedAt }, _dataAccess.DbTransaction);
 		}
+
+		/// <summary>
+		/// 通過客戶ID獲取客戶信息
+		/// </summary>
+		/// <param name="id">客戶ID</param>
+		/// <returns>客戶信息</returns>
+		public async Task<CustomerEntity?> GetCustomerByIdForUpdate(int id)
+		{
+			var sql = LoadSql("Customer.GetCustomerByIdForUpdate");
+
+			return await _dataAccess.DbConnection
+				.QuerySingleOrDefaultAsync<CustomerEntity>(
+					sql,
+					new { Id = id },
+					_dataAccess.DbTransaction);
+		}
 	}
 
     /// <summary>
@@ -157,12 +173,19 @@ namespace ServerProject.Repositories
         /// <returns>客戶信息</returns>
         Task<CustomerEntity?> GetCustomerById(int id);
 
-        /// <summary>
-        /// 插入新的客戶信息
-        /// </summary>
-        /// <param name="customer">新的客戶信息</param>
-        /// <returns>客戶ID</returns>
-        Task<int> InsertCustomer(CustomerEntity customer);
+		/// <summary>
+		/// 通過客戶ID獲取客戶信息（锁定）
+		/// </summary>
+		/// <param name="id">客戶ID</param>
+		/// <returns>客戶信息</returns>
+		Task<CustomerEntity?> GetCustomerByIdForUpdate(int id);
+
+		/// <summary>
+		/// 插入新的客戶信息
+		/// </summary>
+		/// <param name="customer">新的客戶信息</param>
+		/// <returns>客戶ID</returns>
+		Task<int> InsertCustomer(CustomerEntity customer);
 
 		/// <summary>
 		/// 刪除客戶信息

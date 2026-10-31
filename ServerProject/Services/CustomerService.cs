@@ -24,6 +24,11 @@ namespace ServerProject.Services
         private readonly ICustomerAuthRepository _customerAuthRepository;
 
 		/// <summary>
+		/// 帳戶服務實例，用於處理帳戶相關的數據操作
+		/// </summary>
+		private readonly IAccountRepository _accountRepository;
+
+		/// <summary>
 		/// 加密服務實例，用於處理加密相關的操作
 		/// </summary>
 		private readonly ICryptoRepository _cryptoRepository;
@@ -41,19 +46,13 @@ namespace ServerProject.Services
         /// <param name="customerAuthRepository">客戶認證服務實例</param>
         /// <param name="timeProvider">時間提供者實例</param>
         /// <exception cref="ArgumentNullException">参数空异常</exception>
-        public CustomerService(IConnectionFactory connectionFactory, ICustomerRepository customerRepository, ICustomerAuthRepository customerAuthRepository, ICryptoRepository cryptoRepository,ITimeProvider timeProvider) : base(connectionFactory)
+        public CustomerService(IConnectionFactory connectionFactory, ICustomerRepository customerRepository, ICustomerAuthRepository customerAuthRepository, ICryptoRepository cryptoRepository,ITimeProvider timeProvider,IAccountRepository accountRepository) : base(connectionFactory)
         {
-            // 確保服務實例不為空，否則拋出異常
             _customerRepository = customerRepository;
-
-            // 確保認證服務實例不為空，否則拋出異常
             _customerAuthRepository = customerAuthRepository;
-
-			// 確保加密服務實例不為空，否則拋出異常
 			_cryptoRepository = cryptoRepository;
-
-			// 確保時間提供者不為空，否則拋出異常
 			_timeProvider = timeProvider;
+			_accountRepository = accountRepository;
         }
 
 		/// <summary>
@@ -279,7 +278,13 @@ namespace ServerProject.Services
 					"GetCustomerAuthByCustomerIdForRemoval"
 				);
 
-				// TODO: 如果客户的所有账户中还有账户的状态为“啟用”，或者客户的所有交易中还有交易的状态为“待處理”，则不允许删除客户账户，并返回错误信息，返回“未經授權的訪問”
+				// 如果要刪除的客戶相關的認證信息为空，则返回错误信息。
+				if (customerAuthWaitingForRemoval == null)
+				{
+					return RemoveCustomerResultDto.Fail(
+						(int)CustomerErrorCode.CustomerDeletionFailed,
+						"Customer authentication data was not found.");
+				}
 
 				// 獲取當前時間，用於設置客戶的刪除時間
 				var now = _timeProvider.Now();
@@ -290,21 +295,64 @@ namespace ServerProject.Services
 					{
 						_customerRepository.DataAccess = dataAccess;
 						_customerAuthRepository.DataAccess = dataAccess;
+						_accountRepository.DataAccess = dataAccess;
 
-						// 刪除與客戶相關的認證信息，確保在刪除客戶時也能刪除相關的認證信息
-						_ = await _customerAuthRepository.RemoveAuthEntry(customerAuthWaitingForRemoval!);
+						// 锁定并重新验证客户。
+						var lockedCustomer = await _customerRepository.GetCustomerByIdForUpdate(request.Id);
 
-						// 將客戶賬戶標記為已刪除狀態，並設置刪除原因和刪除時間
-						return await _customerRepository.RemoveCustomer(request.Id, request.IsDeleted, request.DeletedReason, now);
+						if (lockedCustomer == null || lockedCustomer.IsDeleted)
+						{
+							throw new CustomerOperationException(CustomerErrorCode.CustomerNotFound,"Customer not found or already removed.");
+						}
+
+						// Active、Frozen 账户都属于未关闭账户。
+						var nonClosedAccounts = await _accountRepository.GetNonClosedAccountsByCustomerId(request.Id);
+
+						if (nonClosedAccounts.Count > 0)
+						{
+							// 此时尚未执行任何写入。
+							return -1;
+						}
+
+						// 删除客户认证信息。
+						var authRows = await _customerAuthRepository.RemoveAuthEntry(customerAuthWaitingForRemoval);
+
+						if (authRows != 1)
+						{
+							// 抛出异常，让 ServiceBase 回滚前面的认证删除。
+							throw new CustomerOperationException(CustomerErrorCode.CustomerDeletionFailed,"Failed to remove customer authentication data.");
+						}
+
+						// 将客户标记为已删除。
+						var affectedRows =
+							await _customerRepository.RemoveCustomer(
+								request.Id,
+								request.IsDeleted,
+								request.DeletedReason,
+								now);
+
+						if (affectedRows != 1)
+						{
+							// 抛出异常，让 ServiceBase 回滚前面的认证删除。
+							throw new CustomerOperationException(
+								CustomerErrorCode.CustomerDeletionFailed,
+								"Failed to remove customer account.");
+						}
+
+						return affectedRows;
 					},
 					"MarkCustomerAsDeleted"
 				);
 
-				// 如果刪除操作失敗，則返回錯誤信息
-				if (isRemoved <= 0)
+				// 如果存在未关闭的账户，则返回错误。
+				if (isRemoved == -1)
 				{
-					return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.CustomerDeletionFailed, "Failed to remove customer account.");
+					return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.CustomerHasNonClosedAccounts,"All accounts must be closed before removing the customer.");
 				}
+			}
+			catch (CustomerOperationException ex)
+			{
+				return RemoveCustomerResultDto.Fail((int)ex.ErrorCode,ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
