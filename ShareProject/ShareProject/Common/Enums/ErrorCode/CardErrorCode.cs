@@ -21,6 +21,10 @@
 		NewPINUnchanged = 5022,            // 新旧PIN相同
 		PINUpdateFailed = 5023,            // PIN相关数据更新失败
 
+		InvalidReplaceReason = 5030, // 无效的换卡原因
+		CardAlreadyReplaced = 5031,  // 卡片已经被替换
+		CardAlreadyDeactivated = 5032, // 卡片已经被停用
+
 		ValidationFailed = 5098,           // 请求参数验证失败
 										   
 		UnableToOperateDb = 5099           // 无法操作数据库

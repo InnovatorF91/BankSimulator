@@ -59,7 +59,7 @@ namespace ServerProject.Repositories
 		}
 
 		/// <summary>
-		/// 获取账户下 Active 状态的卡片数量
+		/// 统计账户下同类型、未过期的 Active／Blocked 卡片数量。
 		/// </summary>
 		/// <param name="accountId">账户ID</param>
 		/// <param name="cardType">卡片类型</param>
@@ -150,6 +150,32 @@ namespace ServerProject.Repositories
 			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CardEntity>(sql, new { CardId = cardId }, _dataAccess.DbTransaction);
 
 		}
+
+		/// <summary>
+		/// 停用卡片以進行替換操作
+		/// </summary>
+		/// <param name="cardId">卡片ID</param>
+		/// <param name="currentStatus">當前卡片狀態</param>
+		/// <param name="newCardId">新卡片ID</param>
+		/// <param name="now">當前時間</param>
+		/// <returns>受影響的行數</returns>
+		public async Task<int> DeactivateCardForReplacement(long cardId, CardStatus currentStatus, long newCardId, DateTime now)
+		{
+			var sql = LoadSql("Card.DeactivateCardForReplacement");
+
+			return await _dataAccess.DbConnection.ExecuteAsync(
+				sql,
+				new
+				{
+					CardId = cardId,
+					CurrentStatus = currentStatus,
+					InactiveStatus = CardStatus.Inactive,
+					NewCardId = newCardId,
+					DeactivatedAt = now,
+					UpdatedAt = now
+				},
+				_dataAccess.DbTransaction);
+		}
 	}
 
     /// <summary>
@@ -219,7 +245,7 @@ namespace ServerProject.Repositories
 		Task<int> DeactivateAllCards(long accountId, CardStatus status, DateTime deactivatedAt ,DateTime updatedAt);
 
 		/// <summary>
-		/// 获取账户下 Active 状态的卡片数量
+		/// 统计账户下同类型、未过期的 Active／Blocked 卡片数量。
 		/// </summary>
 		/// <param name="accountId">账户ID</param>
 		/// <param name="cardType">卡片类型</param>
@@ -234,5 +260,15 @@ namespace ServerProject.Repositories
 		/// <param name="cardId">卡片ID</param>
 		/// <returns>卡片模型</returns>
 		Task<CardEntity?> GetCardByIdForUpdate(long cardId);
+
+		/// <summary>
+		/// 停用卡片以進行替換操作
+		/// </summary>
+		/// <param name="cardId">卡片ID</param>
+		/// <param name="currentStatus">當前卡片狀態</param>
+		/// <param name="newCardId">新卡片ID</param>
+		/// <param name="now">當前時間</param>
+		/// <returns>受影響的行數</returns>
+		Task<int> DeactivateCardForReplacement(long cardId,CardStatus currentStatus,long newCardId,DateTime now);
 	}
 }
