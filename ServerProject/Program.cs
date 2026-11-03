@@ -1,8 +1,11 @@
 using Dapper;
+using Microsoft.AspNetCore.Mvc;
 using ServerProject.Common;
 using ServerProject.Middlewares;
 using ServerProject.Repositories;
 using ServerProject.Services;
+using ShareProject.Common;
+using ShareProject.Response;
 
 namespace ServerProject
 {
@@ -16,7 +19,19 @@ namespace ServerProject
 			DefaultTypeMap.MatchNamesWithUnderscores = true;
 
 			// MVC（含 Views）與 API
-			builder.Services.AddControllersWithViews();
+			builder.Services.AddControllersWithViews().ConfigureApiBehaviorOptions(options =>
+			{
+				options.InvalidModelStateResponseFactory = context =>
+				{
+					var response = new ErrorResponse
+					{
+						Success = false,
+						Code = (int)CommonErrorCode.InvalidRequest,
+						Message ="The request body or one or more fields are invalid."
+					};
+					return new BadRequestObjectResult(response);
+				};
+			});
 
 			// 1) Infrastructure
 			builder.Services.AddSingleton<IConnectionFactory, ConnectionFactory>();
