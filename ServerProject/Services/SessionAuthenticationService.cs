@@ -10,6 +10,11 @@ namespace ServerProject.Services
 	public sealed class SessionAuthenticationService : ServiceBase , ISessionAuthenticationService
 	{
 		/// <summary>
+		/// 客户认证仓储。
+		/// </summary>
+		private readonly ICustomerAuthRepository _customerAuthRepository;
+
+		/// <summary>
 		/// 会话仓储
 		/// </summary>
 		private readonly ICustomerSessionRepository _customerSessionRepository;
@@ -28,9 +33,11 @@ namespace ServerProject.Services
 		public SessionAuthenticationService(
 			IConnectionFactory connectionFactory,
 			ICustomerSessionRepository customerSessionRepository,
+			ICustomerAuthRepository customerAuthRepository,
 			ITimeProvider timeProvider) : base(connectionFactory)
 		{
 			_customerSessionRepository = customerSessionRepository;
+			_customerAuthRepository = customerAuthRepository;
 			_timeProvider = timeProvider;
 		}
 
@@ -41,7 +48,7 @@ namespace ServerProject.Services
 		/// <returns> 会话认证结果，如果认证失败则返回null </returns>
 		public async Task<SessionAuthenticationResult?> Authenticate(Guid sessionId)
 		{
-			// 获取会话信息
+			// 查询会话。
 			var session = await ExecuteDbAsync<CustomerSessionEntity?>(
 				async dataAccess =>
 				{
@@ -50,32 +57,42 @@ namespace ServerProject.Services
 				}
 			);
 
-			// 如果会话不存在或无效，返回null
-			if (session == null)
+			// 会话不存在或已失效。
+			if (session == null || !session.IsValid)
 			{
 				return null;
 			}
 
-			// 如果会话无效，返回null
-			if (!session.IsValid)
-			{
-				return null;
-			}
-
-			// 获取当前时间
 			var now = _timeProvider.Now();
 
-			// 如果会话已过期，返回null
-			if (session.ExpiredAt < now)
+			// 会话已过期。
+			if (session.ExpiredAt <= now)
 			{
 				return null;
 			}
 
-			// 返回会话认证结果
+			// 查询会话所属账号的认证信息。
+			var auth = await ExecuteDbAsync<CustomerAuthEntity?>(
+				async dataAccess =>
+				{
+					_customerAuthRepository.DataAccess = dataAccess;
+					return await _customerAuthRepository.GetAuthByCustomerId(
+						session.UserId);
+				}
+			);
+
+			// 认证记录不存在或已删除。
+			if (auth == null || auth.IsDeleted)
+			{
+				return null;
+			}
+
+			// 返回客户身份及数据库中的管理员标记。
 			return new SessionAuthenticationResult
 			{
 				CustomerId = session.UserId,
-				SessionId = session.SessionId
+				SessionId = session.SessionId,
+				IsAdmin = auth.IsAdmin
 			};
 		}
 	}
@@ -107,5 +124,10 @@ namespace ServerProject.Services
 		/// 会话ID
 		/// </summary>
 		public Guid SessionId { get; init; }
+
+		/// <summary>
+		/// 是否为管理员。
+		/// </summary>
+		public bool IsAdmin { get; init; }
 	}
 }

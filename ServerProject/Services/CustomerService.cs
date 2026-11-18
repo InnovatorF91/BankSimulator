@@ -111,7 +111,7 @@ namespace ServerProject.Services
 					customer.Email,
 					customer.KYCStatus,
 					customer.CreatedAt,
-					customer.UpdateAt,
+					customer.UpdatedAt,
 					customer.DeletedAt,
 					customer.IsDeleted,
 					customer.DeletedReason);
@@ -211,7 +211,7 @@ namespace ServerProject.Services
 					Email = string.IsNullOrEmpty(request.Email) ? null : request.Email,
 					KYCStatus = KYCStatus.Unreviewed,
 					CreatedAt = now,
-					UpdateAt = now,
+					UpdatedAt = now,
 					IsDeleted = false
 				};
 
@@ -441,7 +441,7 @@ namespace ServerProject.Services
 				// 如果更新請求中的基本信息與現有的客戶信息完全相同，則返回錯誤信息，提示沒有檢測到任何變化
 				if (existingCustomer.Name == request.NewName && existingCustomer.BirthDate == request.NewBirthDate && existingCustomer.Gender == request.Transgender)
 				{
-					return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.CustomerUpdateFailed, "No changes detected in the basic profile information.");
+					return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "No changes detected in the basic profile information.");
 				}
 
 				// 在一個事務中更新客戶的基本信息，確保數據的一致性
@@ -489,44 +489,61 @@ namespace ServerProject.Services
 				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "Customer ID must be a positive integer.");
 			}
 
+			// 将空字符串统一为 null。
+			var phone = string.IsNullOrEmpty(request.NewPhoneNumber) ? null	: request.NewPhoneNumber;
+
+			var email = string.IsNullOrEmpty(request.NewEmail) ? null : request.NewEmail;
+
 			// 驗證更新請求中是否提供了至少一種聯繫方式（電話、電子郵件或地址），如果都沒有則返回錯誤信息
-			if (string.IsNullOrEmpty(request.NewPhoneNumber) && string.IsNullOrEmpty(request.NewEmail) && string.IsNullOrEmpty(request.NewAddress))
+			if (phone == null && email == null && string.IsNullOrEmpty(request.NewAddress))
 			{
-				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "Please enter at least one contact information (phone, email or address).");
+				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Please enter at least one contact information (phone, email or address).");
 			}
 
 			try
 			{
 				// 如果更新請求中提供了電話號碼，則檢查該電話號碼是否已經被註冊給其他客戶，如果已經被註冊則返回錯誤信息
-				var existingCustomerByPhone = await ExecuteDbAsync<CustomerEntity?>(
-					async (dataAccess) =>
-					{
-						_customerRepository.DataAccess = dataAccess;
-						return await _customerRepository.GetCustomerByPhone(request.NewPhoneNumber);
-					},
-					"GetCustomerByPhoneForContactInfoUpdate"
-				);
-
-				// 如果找到的客戶信息不為空，且該客戶ID與更新請求中的客戶ID不同，則說明該電話號碼已經被註冊給其他客戶，返回錯誤信息
-				if (existingCustomerByPhone != null && existingCustomerByPhone.CustomerId != request.CustomerId)
+				if (phone != null)
 				{
-					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.DuplicateCustomer, "The phone number is already registered by another customer.");
+					var existingCustomerByPhone = await ExecuteDbAsync<CustomerEntity?>(
+						async (dataAccess) =>
+						{
+							_customerRepository.DataAccess = dataAccess;
+							return await _customerRepository.GetCustomerByPhone(phone);
+						},
+						"GetCustomerByPhoneForContactInfoUpdate"
+					);
+
+					// 如果找到的客戶信息不為空，且該客戶ID與更新請求中的客戶ID不同，則說明該電話號碼已經被註冊給其他客戶，返回錯誤信息
+					if (existingCustomerByPhone != null
+						&& existingCustomerByPhone.CustomerId != request.CustomerId)
+					{
+						return UpdateContactInfoResultDto.Fail(
+							(int)CustomerErrorCode.DuplicateCustomer,
+							"The phone number is already registered by another customer.");
+					}
 				}
 
 				// 如果更新請求中提供了電子郵件地址，則檢查該電子郵件地址是否已經被註冊給其他客戶，如果已經被註冊則返回錯誤信息
-				var existingCustomerByEmail = await ExecuteDbAsync<CustomerEntity?>(
-					async (dataAccess) =>
-					{
-						_customerRepository.DataAccess = dataAccess;
-						return await _customerRepository.GetCustomerByEmail(request.NewEmail);
-					},
-					"GetCustomerByEmailForContactInfoUpdate"
-				);
-
-				// 如果找到的客戶信息不為空，且該客戶ID與更新請求中的客戶ID不同，則說明該電子郵件地址已經被註冊給其他客戶，返回錯誤信息
-				if (existingCustomerByEmail != null && existingCustomerByEmail.CustomerId != request.CustomerId)
+				if (email != null)
 				{
-					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.DuplicateCustomer, "The email address is already registered by another customer.");
+					var existingCustomerByEmail = await ExecuteDbAsync<CustomerEntity?>(
+						async (dataAccess) =>
+						{
+							_customerRepository.DataAccess = dataAccess;
+							return await _customerRepository.GetCustomerByEmail(email);
+						},
+						"GetCustomerByEmailForContactInfoUpdate"
+					);
+
+					// 如果找到的客戶信息不為空，且該客戶ID與更新請求中的客戶ID不同，則說明該電子郵件地址已經被註冊給其他客戶，返回錯誤信息
+					if (existingCustomerByEmail != null
+						&& existingCustomerByEmail.CustomerId != request.CustomerId)
+					{
+						return UpdateContactInfoResultDto.Fail(
+							(int)CustomerErrorCode.DuplicateCustomer,
+							"The email address is already registered by another customer.");
+					}
 				}
 
 				// 從數據庫中獲取要更新的客戶信息，確保該客戶存在且未被刪除
@@ -545,10 +562,19 @@ namespace ServerProject.Services
 					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.CustomerNotFound, "Customer not found or already removed.");
 				}
 
-				// 如果更新請求中的聯繫信息與現有的客戶信息完全相同，則返回錯誤信息，提示沒有檢測到任何變化
-				if (existingCustomer!.Phone == request.NewPhoneNumber && existingCustomer!.Email == request.NewEmail && existingCustomer!.Address == request.NewAddress)
+				// 将数据库中已有的空字符串也统一为 null，再进行比较。
+				var existingPhone = string.IsNullOrEmpty(existingCustomer.Phone) ? null : existingCustomer.Phone;
+
+				var existingEmail = string.IsNullOrEmpty(existingCustomer.Email) ? null	: existingCustomer.Email;
+
+				// phone 和 email 是第 1 步中定义的变量。
+				if (existingPhone == phone
+					&& existingEmail == email
+					&& existingCustomer.Address == request.NewAddress)
 				{
-					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.CustomerUpdateFailed, "No changes detected in the contact information.");
+					return UpdateContactInfoResultDto.Fail(
+						(int)CustomerErrorCode.InvalidCustomerData,
+						"No changes detected in the contact information.");
 				}
 
 				// 獲取當前時間，用於設置客戶的更新時間
@@ -561,11 +587,10 @@ namespace ServerProject.Services
 						_customerRepository.DataAccess = dataAccess;
 						return await _customerRepository.UpdateContactInfo(
 							request.CustomerId,
-							request.NewPhoneNumber,
-							request.NewEmail,
-							request.NewAddress,
-							now
-						);
+	                        request.NewAddress,
+	                        phone,
+	                        email,
+	                        now);
 					},
 					"UpdateCustomerContactInfo"
 				);

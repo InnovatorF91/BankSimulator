@@ -72,7 +72,7 @@ namespace ServerProject.Repositories
 		/// <returns>true:更新成功/false:更新失敗</returns>
 		public async Task<int> UpdateCustomerKycStatus(int customerId, KYCStatus status, DateTime updateAt)
 		{
-            var sql = LoadSql("Customer.UpdateCustomerKycStatus");
+            var sql = LoadSql("Customer.UpdateCustomerKyc");
 
             return await _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, KYCStatus = status, UpdateAt = updateAt }, _dataAccess.DbTransaction);
 		}

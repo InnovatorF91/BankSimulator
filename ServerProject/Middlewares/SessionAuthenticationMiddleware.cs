@@ -74,6 +74,12 @@ namespace ServerProject.Middlewares
 				new Claim("session_id", result.SessionId.ToString())
 			};
 
+			// 根据数据库中的管理员标记，添加管理员角色。
+			if (result.IsAdmin)
+			{
+				claims.Add(new Claim(ClaimTypes.Role, "Admin"));
+			}
+
 			// 创建声明身份
 			var identity = new ClaimsIdentity(
 				claims,

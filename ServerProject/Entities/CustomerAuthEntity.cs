@@ -17,7 +17,7 @@ namespace ServerProject.Entities
         [Column("created_at")]
         public DateTime? CreatedAt { get; set; } // 創建時間
         [Column("updated_at")]
-        public DateTime? UpdateAt { get; set; } // 更新時間
+        public DateTime? UpdatedAt { get; set; } // 更新時間
         [Column("deleted_at")]
         public DateTime? DeletedAt { get; set; } // 刪除時間
         [Column("is_deleted")]
@@ -28,7 +28,7 @@ namespace ServerProject.Entities
         public int FailedCount { get; set; } // 登錄失敗次數
         [Column("locked_until")]
         public DateTime? LockedUntil { get; set; } // 鎖定到期時間
-        [Column("password_algo")]
+        [Column("token_version")]
         public int TokenVersion { get; set; } // 令牌版本
         [Column("auth_type")]
         public short AuthType { get; set; } // 認證類型
@@ -38,5 +38,7 @@ namespace ServerProject.Entities
         public DateTime? TwoFactorPendingExpiresAt { get; set; } // 雙因素認證待處理過期時間
         [Column("two_factor_enabled_at")]
         public DateTime? TwoFactorEnabledAt { get; set; } // 雙因素認證啟用時間
-    }
+		[Column("is_admin")]
+		public bool IsAdmin { get; set; } // 是否為管理員
+	}
 }

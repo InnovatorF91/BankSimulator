@@ -35,7 +35,7 @@ namespace ServerProject.Entities
         [Column("created_at")]
         public DateTime? CreatedAt { get; set; } // 創建時間
         [Column("updated_at")]
-        public DateTime? UpdateAt { get; set; } // 更新日期
+        public DateTime? UpdatedAt { get; set; } // 更新日期
         [Column("deleted_at")]
         public DateTime? DeletedAt { get; set; } // 刪除日期
         [Column("is_deleted")]

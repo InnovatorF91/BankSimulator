@@ -1,5 +1,5 @@
 ﻿-- 更新認證類型語句
 UPDATE "CustomerAuth"
 			SET auth_type = @AuthType,
-			updated_at = @UpdateAt
+			updated_at = @UpdateDate
 			WHERE customer_id = @UserId AND is_deleted = false;

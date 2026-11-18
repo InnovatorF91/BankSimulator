@@ -2,4 +2,4 @@
 INSERT INTO "CustomerAuth"
             (customer_id, login_id, password_hash, created_at)
             VALUES
-            (@CustomerId, @LoginId, @PasswordHash,@CreateAt);
+            (@CustomerId, @LoginId, @PasswordHash,@CreatedAt);
