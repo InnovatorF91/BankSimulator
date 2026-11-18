@@ -1,4 +1,5 @@
 ﻿using Npgsql;
+using ShareProject.Common;
 using System.Data.Common;
 
 namespace ServerProject.Common
@@ -94,6 +95,20 @@ namespace ServerProject.Common
 				throw new CardNumberConflictException(
 					"The generated card number already exists.",
 					ex);
+			}
+			catch (PostgresException ex)
+			    when (ex.SqlState == PostgresErrorCodes.UniqueViolation 
+				&& ex.TableName == "Customers"
+				&& (ex.ConstraintName is "uk_email" or "uk_phone"))
+			{
+				if (da != null)
+				{
+					TryRollback(da);
+				}
+
+				throw new CustomerOperationException(
+					CustomerErrorCode.DuplicateCustomer,
+					"The phone number or email address is already registered.");
 			}
 			catch (DbException ex)
 			{
