@@ -133,7 +133,7 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> UnLock(int userId, DateTime updateDate)
 		{
-			var sql = LoadSql("CustomerAuth.UnLockAccount");
+			var sql = LoadSql("CustomerAuth.UnlockAccount");
 			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
 			{
 				UserId = userId,

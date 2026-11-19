@@ -4,6 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>021298df-a5e1-4e4b-b1b4-8f5507c1e965</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,18 +19,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Sql\Transaction\GetAmountDeltaByTransactionId.sql">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Update="Sql\Transaction\GetTransactionById.sql">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Update="Sql\Transaction\GetTransactionsByAccountId.sql">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Update="Sql\Transaction\InsertTransaction.sql">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
+    <None Update="Sql/**/*.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
-
 </Project>

@@ -44,11 +44,27 @@ namespace ServerProject
 					useTransaction: false);
 			});
 			builder.Services.AddSingleton<ITimeProvider, SystemClock>();
-			builder.Services.AddSingleton<ICryptoRepository, CryptoRepository>();
-			builder.Services.AddSingleton<IJwtProvider, JwtProvider>();
+			builder.Services.AddSingleton<HashOption>();
+			builder.Services.AddSingleton<ICryptoRepository, CryptoRepository>(); ;
 			builder.Services.AddSingleton<ISessionOption, SessionOption>();
+			builder.Services.AddSingleton<ITwoFactorOption, TwoFactorOption>();
 			builder.Services.AddSingleton<IPasswordValidator, PasswordValidator>();
 			builder.Services.AddSingleton<ICardNumberGenerator,CardNumberGenerator>();
+			builder.Services.AddSingleton<IJwtProvider>(services =>
+			{
+				var configuration = services.GetRequiredService<IConfiguration>();
+				var secret = configuration["Jwt:Secret"];
+
+				if (string.IsNullOrWhiteSpace(secret))
+				{
+					throw new InvalidOperationException("Jwt:Secret is not configured.");
+				}
+
+				return new JwtProvider(
+					secret,
+					services.GetRequiredService<ICryptoRepository>(),
+					services.GetRequiredService<ITimeProvider>());
+			});
 
 			builder.Services.Configure<SmtpOption>(
 				builder.Configuration.GetSection("SmtpOption"));
@@ -95,9 +111,6 @@ namespace ServerProject
 			app.UseStaticFiles();
 
 			app.UseRouting();
-
-			// 启用身份验证中间件
-			app.UseAuthentication();
 
 			// 启用自定义的会话身份验证中间件
 			app.UseMiddleware<SessionAuthenticationMiddleware>();
