@@ -254,6 +254,170 @@ namespace ServerProject.Controllers
 		}
 
 		/// <summary>
+		/// 冻结指定账户。
+		/// </summary>
+		/// <param name="request">冻结账户请求对象，包含账户ID和冻结原因等信息。</param>
+		/// <returns>返回冻结账户的响应对象，包含操作结果和相关信息。</returns>
+		[HttpPost("FreezeAccount")]
+		public async Task<ActionResult<FreezeAccountResponse>> FreezeAccount([FromBody] FreezeAccountRequest request)
+		{
+			if (GetAdminAccessError() is { } accessError)
+			{
+				return accessError;
+			}
+
+			var result = await _accountAdminService.FreezeAccount(request);
+
+			if (!result.Success)
+			{
+				var statusCode = result.Code switch
+				{
+					(int)AccountErrorCode.ValidationFailed
+						=> StatusCodes.Status400BadRequest,
+
+					(int)AccountErrorCode.AccountNotFound
+						=> StatusCodes.Status404NotFound,
+
+					(int)AccountErrorCode.AccountAlreadyClosed
+						or (int)AccountErrorCode.AccountStatusInvalid
+						=> StatusCodes.Status409Conflict,
+
+					_ => StatusCodes.Status500InternalServerError
+				};
+
+				return StatusCode(statusCode, new ErrorResponse
+				{
+					Success = false,
+					Code = result.Code,
+					// 数据库或日志写入失败时，对外只返回通用消息。
+					Message = statusCode == StatusCodes.Status500InternalServerError
+						? "An internal server error occurred."
+						: result.Message ?? string.Empty
+				});
+			}
+
+			return Ok(new FreezeAccountResponse
+			{
+				Success = true,
+				Code = result.Code,
+				Message = "The account was frozen successfully.",
+				AccountId = result.AccountId,
+				Status = result.Status,
+				UpdateDate = result.UpdateDate
+			});
+		}
+
+		/// <summary>
+		/// 解冻指定账户。
+		/// </summary>
+		/// <param name="request">解冻账户请求对象，包含账户ID和解冻原因等信息。</param>
+		/// <returns>返回解冻账户的响应对象，包含操作结果和相关信息。</returns>
+		[HttpPost("UnfreezeAccount")]
+		public async Task<ActionResult<UnfreezeAccountResponse>> UnfreezeAccount([FromBody] UnfreezeAccountRequest request)
+		{
+			if (GetAdminAccessError() is { } accessError)
+			{
+				return accessError;
+			}
+
+			var result = await _accountAdminService.UnfreezeAccount(request);
+
+			if (!result.Success)
+			{
+				var statusCode = result.Code switch
+				{
+					(int)AccountErrorCode.ValidationFailed
+						=> StatusCodes.Status400BadRequest,
+
+					(int)AccountErrorCode.AccountNotFound
+						=> StatusCodes.Status404NotFound,
+
+					(int)AccountErrorCode.AccountAlreadyClosed
+						or (int)AccountErrorCode.AccountStatusInvalid
+						=> StatusCodes.Status409Conflict,
+
+					_ => StatusCodes.Status500InternalServerError
+				};
+
+				return StatusCode(statusCode, new ErrorResponse
+				{
+					Success = false,
+					Code = result.Code,
+					// 数据库或日志写入失败时，对外只返回通用消息。
+					Message = statusCode == StatusCodes.Status500InternalServerError
+						? "An internal server error occurred."
+						: result.Message ?? string.Empty
+				});
+			}
+
+			return Ok(new UnfreezeAccountResponse
+			{
+				Success = true,
+				Code = result.Code,
+				Message = "The account was unfrozen successfully.",
+				AccountId = result.AccountId,
+				Status = result.Status,
+				UpdateDate = result.UpdateDate
+			});
+		}
+
+		/// <summary>
+		/// 管理员强制关闭指定账户
+		/// </summary>
+		/// <param name="request">包含账户ID和强制关闭理由的请求对象</param>
+		/// <returns>返回强制关闭指定账户的响应对象，包含操作结果和相关信息。</returns>
+		[HttpPost("ForceCloseAccount")]
+		public async Task<ActionResult<ForceCloseAccountResponse>> ForceCloseAccount([FromBody] ForceCloseAccountRequest request)
+		{
+			if (GetAdminAccessError() is { } accessError)
+			{
+				return accessError;
+			}
+
+			var result = await _accountAdminService.ForceCloseAccount(request);
+
+			if (!result.Success)
+			{
+				var statusCode = result.Code switch
+				{
+					(int)AccountErrorCode.ValidationFailed
+						=> StatusCodes.Status400BadRequest,
+
+					(int)AccountErrorCode.AccountNotFound
+						=> StatusCodes.Status404NotFound,
+
+					(int)AccountErrorCode.AccountAlreadyClosed
+						or (int)AccountErrorCode.AccountBalanceNotZero
+						or (int)AccountErrorCode.AccountStatusInvalid
+						=> StatusCodes.Status409Conflict,
+
+					_ => StatusCodes.Status500InternalServerError
+				};
+
+				return StatusCode(statusCode, new ErrorResponse
+				{
+					Success = false,
+					Code = result.Code,
+					// 数据库或日志写入失败时，对外返回通用消息。
+					Message = statusCode == StatusCodes.Status500InternalServerError
+						? "An internal server error occurred."
+						: result.Message ?? string.Empty
+				});
+			}
+
+			return Ok(new ForceCloseAccountResponse
+			{
+				Success = true,
+				Code = result.Code,
+				Message = "The account was force closed successfully.",
+				AccountId = result.AccountId,
+				Status = result.Status,
+				CloseDate = result.CloseDate,
+				UpdateDate = result.UpdateDate
+			});
+		}
+
+		/// <summary>
 		/// 检查当前用户是否具有管理员权限，如果没有，则返回相应的错误响应。
 		/// </summary>
 		/// <returns>返回一个 ActionResult 对象，如果当前用户没有管理员权限，则返回错误响应；否则返回 null。</returns>
