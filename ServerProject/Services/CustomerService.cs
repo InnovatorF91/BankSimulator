@@ -273,123 +273,115 @@ namespace ServerProject.Services
 		public async Task<RemoveCustomerResultDto> RemoveCustomer(RemoveCustomerRequest request)
 		{
 			// 驗證刪除請求中客戶ID是否有效，如果無效則返回錯誤信息
-			if (request.Id <= 0)
+			if (request == null || request.Id <= 0)
 			{
-				return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "Customer ID must be a positive integer.");
+				return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Customer ID must be a positive integer.");
 			}
 
 			try
 			{
 				// 從數據庫中獲取要刪除的客戶信息，確保該客戶存在且未被刪除
 				var existingCustomer = await ExecuteDbAsync<CustomerEntity?>(
-				async (dataAccess) =>
-				{
-					_customerRepository.DataAccess = dataAccess;
-					return await _customerRepository.GetCustomerById(request.Id);
-				},
-				"GetCustomerByIdForRemoval"
-				);
+					async dataAccess =>
+					{
+						_customerRepository.DataAccess = dataAccess;
+						return await _customerRepository.GetCustomerById(request.Id);
+					},
+					"GetCustomerByIdForRemoval");
 
 				// 如果客戶信息不存在或已經被刪除，則返回錯誤信息
 				if (existingCustomer == null || existingCustomer.IsDeleted)
 				{
-					return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.CustomerNotFound, "Customer not found or already removed.");
+					return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.CustomerNotFound,"Customer not found or already removed.");
 				}
 
-				// 從數據庫中獲取與要刪除的客戶相關的認證信息，確保在刪除客戶時也能刪除相關的認證信息
-				var customerAuthWaitingForRemoval = await ExecuteDbAsync<CustomerAuthEntity?>(
-					async (dataAccess) =>
+				// 從數據庫中獲取客戶的認證信息，確保該客戶存在認證數據
+				var customerAuth = await ExecuteDbAsync<CustomerAuthEntity?>(
+					async dataAccess =>
 					{
 						_customerAuthRepository.DataAccess = dataAccess;
 						return await _customerAuthRepository.GetAuthByCustomerId(request.Id);
 					},
-					"GetCustomerAuthByCustomerIdForRemoval"
-				);
+					"GetCustomerAuthByCustomerIdForRemoval");
 
-				// 如果要刪除的客戶相關的認證信息为空，则返回错误信息。
-				if (customerAuthWaitingForRemoval == null)
+				// 如果客戶的認證信息不存在，則返回錯誤信息
+				if (customerAuth == null)
 				{
-					return RemoveCustomerResultDto.Fail(
-						(int)CustomerErrorCode.CustomerDeletionFailed,
-						"Customer authentication data was not found.");
+					return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.CustomerDeletionFailed,"Customer authentication data was not found.");
 				}
 
-				// 獲取當前時間，用於設置客戶的刪除時間
 				var now = _timeProvider.Now();
 
-				// 在一個事務中同時刪除客戶和相關的認證信息，確保數據的一致性
-				var isRemoved = await ExecuteInTxAsync<int>(
-					async (dataAccess) =>
+				// 在一個事務中同時刪除客戶和客戶認證信息，確保數據的一致性
+				return await ExecuteInTxAsync<RemoveCustomerResultDto>(
+					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
 						_customerAuthRepository.DataAccess = dataAccess;
 						_accountRepository.DataAccess = dataAccess;
 
-						// 锁定并重新验证客户。
-						var lockedCustomer = await _customerRepository.GetCustomerByIdForUpdate(request.Id);
+						// 鎖定客戶記錄以進行更新，確保在刪除操作期間不會有其他操作修改該客戶的數據
+						var lockedCustomer = await _customerRepository.GetCustomerByIdForUpdate(
+							request.Id);
 
+						// 如果鎖定的客戶記錄不存在或已經被刪除，則拋出異常，提示客戶不存在或已經被刪除
 						if (lockedCustomer == null || lockedCustomer.IsDeleted)
 						{
 							throw new CustomerOperationException(CustomerErrorCode.CustomerNotFound,"Customer not found or already removed.");
 						}
 
-						// Active、Frozen 账户都属于未关闭账户。
+						// 檢查客戶是否有未關閉的帳戶，如果有則拋出異常，提示所有帳戶必須在刪除客戶之前關閉
 						var nonClosedAccounts = await _accountRepository.GetNonClosedAccountsByCustomerId(request.Id);
 
+						// 如果客戶有未關閉的帳戶，則拋出異常，提示所有帳戶必須在刪除客戶之前關閉
 						if (nonClosedAccounts.Count > 0)
 						{
-							// 此时尚未执行任何写入。
-							return -1;
+							throw new CustomerOperationException(
+								CustomerErrorCode.CustomerHasNonClosedAccounts,
+								"All accounts must be closed before removing the customer.");
 						}
 
-						// 删除客户认证信息。
-						var authRows = await _customerAuthRepository.RemoveAuthEntry(customerAuthWaitingForRemoval);
+						// 刪除客戶的認證信息，如果刪除操作失敗，則拋出異常，提示刪除客戶認證數據失敗
+						var authRows = await _customerAuthRepository.RemoveAuthEntry(customerAuth);
 
+						// 如果刪除客戶認證信息的影響行數不等於1，則拋出異常，提示刪除客戶認證數據失敗
 						if (authRows != 1)
 						{
-							// 抛出异常，让 ServiceBase 回滚前面的认证删除。
-							throw new CustomerOperationException(CustomerErrorCode.CustomerDeletionFailed,"Failed to remove customer authentication data.");
+							throw new CustomerOperationException(
+								CustomerErrorCode.CustomerDeletionFailed,
+								"Failed to remove customer authentication data.");
 						}
 
-						// 将客户标记为已删除。
-						var affectedRows =
-							await _customerRepository.RemoveCustomer(
-								request.Id,
-								request.IsDeleted,
-								request.DeletedReason,
-								now);
+						// 刪除客戶的基本信息，將客戶標記為已刪除狀態，如果刪除操作失敗，則拋出異常，提示刪除客戶賬戶失敗
+						var affectedRows = await _customerRepository.RemoveCustomer(
+							request.Id,
+							request.IsDeleted,
+							request.DeletedReason,
+							now);
 
+						// 如果刪除客戶基本信息的影響行數不等於1，則拋出異常，提示刪除客戶賬戶失敗
 						if (affectedRows != 1)
 						{
-							// 抛出异常，让 ServiceBase 回滚前面的认证删除。
 							throw new CustomerOperationException(
 								CustomerErrorCode.CustomerDeletionFailed,
 								"Failed to remove customer account.");
 						}
 
-						return affectedRows;
+						// 返回成功的刪除結果
+						return RemoveCustomerResultDto.SuccessDto();
 					},
-					"MarkCustomerAsDeleted"
-				);
-
-				// 如果存在未关闭的账户，则返回错误。
-				if (isRemoved == -1)
-				{
-					return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.CustomerHasNonClosedAccounts,"All accounts must be closed before removing the customer.");
-				}
+					"MarkCustomerAsDeleted");
 			}
 			catch (CustomerOperationException ex)
 			{
-				return RemoveCustomerResultDto.Fail((int)ex.ErrorCode,ex.Message);
+				// 如果在刪除客戶過程中發生業務邏輯異常，則返回錯誤信息
+				return RemoveCustomerResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
 				// 如果操作數據庫時發生異常，則返回錯誤信息
-				return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb, "Unable to operate the database.");
+				return RemoveCustomerResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb,"Unable to operate the database.");
 			}
-
-			// 返回成功的刪除結果
-			return RemoveCustomerResultDto.SuccessDto();
 		}
 
 		/// <summary>
@@ -399,81 +391,88 @@ namespace ServerProject.Services
 		/// <returns>返回包含更新結果的UpdateBasicProfileResultDto對象</returns>
 		public async Task<UpdateBasicProfileResultDto> UpdateBasicProfile(UpdateBasicProfileRequest request)
 		{
-			// 獲取當前時間，用於設置客戶的更新時間
-			var now = _timeProvider.Now();
-
-			// 驗證更新請求中客戶ID是否有效，如果無效則返回錯誤信息
-			if (request.Id <= 0)
+			// 如果更新請求中客戶ID無效，則返回錯誤信息，提示客戶ID必須是正整數
+			if (request == null || request.Id <= 0)
 			{
-				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "Customer ID must be a positive integer.");
+				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Customer ID must be a positive integer.");
 			}
 
-			// 驗證更新請求中客戶名是否完整，如果不完整則返回錯誤信息
+			// 如果更新請求中新的客戶名稱為空，則返回錯誤信息，提示請輸入客戶名稱
 			if (string.IsNullOrEmpty(request.NewName))
 			{
-				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "Please enter the customer name.");
+				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Please enter the customer name.");
 			}
 
-			// 驗證更新請求中出生日期是否有效，如果無效則返回錯誤信息
+			var now = _timeProvider.Now();
+
+			// 如果更新請求中新的出生日期為默認值或晚於當前時間，則返回錯誤信息，提示請輸入有效的出生日期
 			if (request.NewBirthDate == default || request.NewBirthDate > now)
 			{
-				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "Please enter a valid birth date.");
+				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Please enter a valid birth date.");
 			}
 
 			try
 			{
 				// 從數據庫中獲取要更新的客戶信息，確保該客戶存在且未被刪除
 				var existingCustomer = await ExecuteDbAsync<CustomerEntity?>(
-					async (dataAccess) =>
+					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
 						return await _customerRepository.GetCustomerById(request.Id);
 					},
-					"GetCustomerByIdForUpdate"
-				);
+					"GetCustomerByIdForUpdate");
 
 				// 如果客戶信息不存在或已經被刪除，則返回錯誤信息
 				if (existingCustomer == null || existingCustomer.IsDeleted)
 				{
-					return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.CustomerNotFound, "Customer not found or already removed.");
+					return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.CustomerNotFound,"Customer not found or already removed.");
 				}
 
 				// 如果更新請求中的基本信息與現有的客戶信息完全相同，則返回錯誤信息，提示沒有檢測到任何變化
-				if (existingCustomer.Name == request.NewName && existingCustomer.BirthDate == request.NewBirthDate && existingCustomer.Gender == request.Transgender)
+				if (existingCustomer.Name == request.NewName &&
+					existingCustomer.BirthDate == request.NewBirthDate &&
+					existingCustomer.Gender == request.Transgender)
 				{
-					return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "No changes detected in the basic profile information.");
+					return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"No changes detected in the basic profile information.");
 				}
 
 				// 在一個事務中更新客戶的基本信息，確保數據的一致性
-				var isUpdated = await ExecuteInTxAsync<int>(
-					async (dataAccess) =>
+				return await ExecuteInTxAsync<UpdateBasicProfileResultDto>(
+					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
-						return await _customerRepository.UpdateBasicProfile(
+
+						// 更新客戶的基本信息，包括名稱、性別、出生日期和更新時間
+						var affectedRows = await _customerRepository.UpdateBasicProfile(
 							request.Id,
 							request.NewName,
 							(short)request.Transgender,
 							DateOnly.FromDateTime(request.NewBirthDate),
-							now
-						);
-					},
-					"UpdateCustomerBasicProfile"
-				);
+							now);
 
-				// 如果更新操作失敗，則返回錯誤信息
-				if (isUpdated <= 0)
-				{
-					return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.CustomerUpdateFailed, "Failed to update customer basic profile.");
-				}
+						// 如果更新操作失敗，則拋出異常，提示更新客戶基本信息失敗
+						if (affectedRows != 1)
+						{
+							throw new CustomerOperationException(
+								CustomerErrorCode.CustomerUpdateFailed,
+								"Failed to update customer basic profile.");
+						}
+
+						// 返回成功的更新結果
+						return UpdateBasicProfileResultDto.SuccessDto();
+					},
+					"UpdateCustomerBasicProfile");
+			}
+			catch (CustomerOperationException ex)
+			{
+				// 如果在更新客戶基本信息過程中發生業務邏輯異常，則返回錯誤信息
+				return UpdateBasicProfileResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
 				// 如果操作數據庫時發生異常，則返回錯誤信息
-				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb, "Unable to operate the database.");
+				return UpdateBasicProfileResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb,"Unable to operate the database.");
 			}
-
-			// 返回成功的更新結果
-			return UpdateBasicProfileResultDto.SuccessDto();
 		}
 
 		/// <summary>
@@ -484,17 +483,20 @@ namespace ServerProject.Services
 		public async Task<UpdateContactInfoResultDto> UpdateContactInfo(UpdateContactInfoRequest request)
 		{
 			// 驗證更新請求中客戶ID是否有效，如果無效則返回錯誤信息
-			if (request.CustomerId <= 0)
+			if (request == null || request.CustomerId <= 0)
 			{
-				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData, "Customer ID must be a positive integer.");
+				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Customer ID must be a positive integer.");
 			}
 
-			// 将空字符串统一为 null。
-			var phone = string.IsNullOrEmpty(request.NewPhoneNumber) ? null	: request.NewPhoneNumber;
+			// 电话和邮箱的空字符串统一按 null 处理。
+			var phone = string.IsNullOrEmpty(request.NewPhoneNumber)
+				? null
+				: request.NewPhoneNumber;
+			var email = string.IsNullOrEmpty(request.NewEmail)
+				? null
+				: request.NewEmail;
 
-			var email = string.IsNullOrEmpty(request.NewEmail) ? null : request.NewEmail;
-
-			// 驗證更新請求中是否提供了至少一種聯繫方式（電話、電子郵件或地址），如果都沒有則返回錯誤信息
+			// 如果更新請求中沒有提供任何聯繫信息（電話、電子郵件或地址），則返回錯誤信息，提示至少需要提供一種聯繫方式
 			if (phone == null && email == null && string.IsNullOrEmpty(request.NewAddress))
 			{
 				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Please enter at least one contact information (phone, email or address).");
@@ -502,117 +504,114 @@ namespace ServerProject.Services
 
 			try
 			{
-				// 如果更新請求中提供了電話號碼，則檢查該電話號碼是否已經被註冊給其他客戶，如果已經被註冊則返回錯誤信息
+				// 客户可以保留自己的号码，但不能使用其他客户的号码。
 				if (phone != null)
 				{
-					var existingCustomerByPhone = await ExecuteDbAsync<CustomerEntity?>(
-						async (dataAccess) =>
+					// 如果更新請求中提供了電話號碼，則檢查該電話號碼是否已經被其他客戶註冊，如果已經被其他客戶註冊則返回錯誤信息
+					var customerByPhone = await ExecuteDbAsync<CustomerEntity?>(
+						async dataAccess =>
 						{
 							_customerRepository.DataAccess = dataAccess;
 							return await _customerRepository.GetCustomerByPhone(phone);
 						},
-						"GetCustomerByPhoneForContactInfoUpdate"
-					);
+						"GetCustomerByPhoneForContactInfoUpdate");
 
-					// 如果找到的客戶信息不為空，且該客戶ID與更新請求中的客戶ID不同，則說明該電話號碼已經被註冊給其他客戶，返回錯誤信息
-					if (existingCustomerByPhone != null
-						&& existingCustomerByPhone.CustomerId != request.CustomerId)
+					// 如果查詢到的客戶不為空，且該客戶的ID與當前更新請求中的客戶ID不同，則表示該電話號碼已經被其他客戶註冊，返回錯誤信息
+					if (customerByPhone != null && customerByPhone.CustomerId != request.CustomerId)
 					{
-						return UpdateContactInfoResultDto.Fail(
-							(int)CustomerErrorCode.DuplicateCustomer,
-							"The phone number is already registered by another customer.");
+						return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.DuplicateCustomer,"The phone number is already registered by another customer.");
 					}
 				}
 
-				// 如果更新請求中提供了電子郵件地址，則檢查該電子郵件地址是否已經被註冊給其他客戶，如果已經被註冊則返回錯誤信息
+				// 邮箱采用和电话号码相同的归属检查。
 				if (email != null)
 				{
-					var existingCustomerByEmail = await ExecuteDbAsync<CustomerEntity?>(
-						async (dataAccess) =>
+					// 如果更新請求中提供了電子郵件地址，則檢查該電子郵件地址是否已經被其他客戶註冊，如果已經被其他客戶註冊則返回錯誤信息
+					var customerByEmail = await ExecuteDbAsync<CustomerEntity?>(
+						async dataAccess =>
 						{
 							_customerRepository.DataAccess = dataAccess;
 							return await _customerRepository.GetCustomerByEmail(email);
 						},
-						"GetCustomerByEmailForContactInfoUpdate"
-					);
+						"GetCustomerByEmailForContactInfoUpdate");
 
-					// 如果找到的客戶信息不為空，且該客戶ID與更新請求中的客戶ID不同，則說明該電子郵件地址已經被註冊給其他客戶，返回錯誤信息
-					if (existingCustomerByEmail != null
-						&& existingCustomerByEmail.CustomerId != request.CustomerId)
+					// 如果查詢到的客戶不為空，且該客戶的ID與當前更新請求中的客戶ID不同，則表示該電子郵件地址已經被其他客戶註冊，返回錯誤信息
+					if (customerByEmail != null && customerByEmail.CustomerId != request.CustomerId)
 					{
-						return UpdateContactInfoResultDto.Fail(
-							(int)CustomerErrorCode.DuplicateCustomer,
-							"The email address is already registered by another customer.");
+						return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.DuplicateCustomer,"The email address is already registered by another customer.");
 					}
 				}
 
 				// 從數據庫中獲取要更新的客戶信息，確保該客戶存在且未被刪除
 				var existingCustomer = await ExecuteDbAsync<CustomerEntity?>(
-					async (dataAccess) =>
+					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
 						return await _customerRepository.GetCustomerById(request.CustomerId);
 					},
-					"GetCustomerByIdForContactInfoUpdate"
-				);
+					"GetCustomerByIdForContactInfoUpdate");
 
 				// 如果客戶信息不存在或已經被刪除，則返回錯誤信息
 				if (existingCustomer == null || existingCustomer.IsDeleted)
 				{
-					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.CustomerNotFound, "Customer not found or already removed.");
+					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.CustomerNotFound,"Customer not found or already removed.");
 				}
 
-				// 将数据库中已有的空字符串也统一为 null，再进行比较。
-				var existingPhone = string.IsNullOrEmpty(existingCustomer.Phone) ? null : existingCustomer.Phone;
+				// 比较前也把数据库里的旧空字符串转换为 null，避免把等价的值判为变更。
+				var existingPhone = string.IsNullOrEmpty(existingCustomer.Phone)
+					? null
+					: existingCustomer.Phone;
+				var existingEmail = string.IsNullOrEmpty(existingCustomer.Email)
+					? null
+					: existingCustomer.Email;
 
-				var existingEmail = string.IsNullOrEmpty(existingCustomer.Email) ? null	: existingCustomer.Email;
-
-				// phone 和 email 是第 1 步中定义的变量。
-				if (existingPhone == phone
-					&& existingEmail == email
-					&& existingCustomer.Address == request.NewAddress)
+				// 如果更新請求中的聯繫信息與現有的客戶信息完全相同，則返回錯誤信息，提示沒有檢測到任何變化
+				if (existingPhone == phone &&
+					existingEmail == email &&
+					existingCustomer.Address == request.NewAddress)
 				{
-					return UpdateContactInfoResultDto.Fail(
-						(int)CustomerErrorCode.InvalidCustomerData,
-						"No changes detected in the contact information.");
+					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"No changes detected in the contact information.");
 				}
 
-				// 獲取當前時間，用於設置客戶的更新時間
 				var now = _timeProvider.Now();
 
 				// 在一個事務中更新客戶的聯繫信息，確保數據的一致性
-				var isUpdated = await ExecuteInTxAsync<int>(
-					async (dataAccess) =>
+				return await ExecuteInTxAsync<UpdateContactInfoResultDto>(
+					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
-						return await _customerRepository.UpdateContactInfo(
-							request.CustomerId,
-	                        request.NewAddress,
-	                        phone,
-	                        email,
-	                        now);
-					},
-					"UpdateCustomerContactInfo"
-				);
 
-				// 如果更新操作失敗，則返回錯誤信息
-				if (isUpdated <= 0)
-				{
-					return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.CustomerUpdateFailed, "Failed to update customer contact information.");
-				}
+						// 更新客戶的聯繫信息，包括地址、電話號碼、電子郵件地址和更新時間
+						var affectedRows = await _customerRepository.UpdateContactInfo(
+							request.CustomerId,
+							request.NewAddress,
+							phone,
+							email,
+							now);
+
+						// 只允许更新一条客户记录。抛出异常后，事务封装会回滚。
+						if (affectedRows != 1)
+						{
+							throw new CustomerOperationException(
+								CustomerErrorCode.CustomerUpdateFailed,
+								"Failed to update customer contact information.");
+						}
+
+						// 返回成功的更新結果
+						return UpdateContactInfoResultDto.SuccessDto();
+					},
+					"UpdateCustomerContactInfo");
 			}
 			catch (CustomerOperationException ex)
 			{
-				return UpdateContactInfoResultDto.Fail((int)ex.ErrorCode,ex.Message);
+				// 保留业务错误码，包括数据库唯一约束转换出的 DuplicateCustomer。
+				return UpdateContactInfoResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
 				// 如果操作數據庫時發生異常，則返回錯誤信息
-				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb, "Unable to operate the database.");
+				return UpdateContactInfoResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb,"Unable to operate the database.");
 			}
-
-			// 返回成功的更新結果
-			return UpdateContactInfoResultDto.SuccessDto();
 		}
 
 		/// <summary>
@@ -622,101 +621,95 @@ namespace ServerProject.Services
 		/// <returns>身份证件更新结果。</returns>
 		public async Task<UpdateIdentityDocumentResultDto> UpdateIdentityDocument(UpdateIdentityDocumentRequest request)
 		{
-			// 驗證更新請求中客戶ID是否有效，如果無效則返回錯誤信息
+			// 验证请求中客户ID是否有效，如果无效则返回错误信息
 			if (request == null || request.CustomerId <= 0)
 			{
-				return UpdateIdentityDocumentResultDto.Fail(
-					(int)CustomerErrorCode.InvalidCustomerData,
-					"Customer ID must be a positive integer.");
+				return UpdateIdentityDocumentResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Customer ID must be a positive integer.");
 			}
 
-			// 驗證更新請求中證件類型是否有效，如果無效則返回錯誤信息
-			if (!Enum.IsDefined(typeof(IDType), (IDType)request.NewIdType))
+			// 验证请求中新的身份证件类型是否有效，如果无效则返回错误信息
+			var idType = (IDType)request.NewIdType;
+			if (!Enum.IsDefined(typeof(IDType), idType))
 			{
-				return UpdateIdentityDocumentResultDto.Fail(
-					(int)CustomerErrorCode.InvalidCustomerData,
-					"Invalid ID type.");
+				return UpdateIdentityDocumentResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Invalid ID type.");
 			}
 
-			// 驗證更新請求中證件號碼是否為空或僅包含空白字符，如果是則返回錯誤信息
+			// 验证请求中新的身份证件号码是否为空或仅包含空白字符，如果是则返回错误信息
 			if (string.IsNullOrWhiteSpace(request.NewIdNumber))
 			{
-				return UpdateIdentityDocumentResultDto.Fail(
-					(int)CustomerErrorCode.InvalidCustomerData,
-					"Please enter the ID number.");
+				return UpdateIdentityDocumentResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Please enter the ID number.");
 			}
 
-			// 驗證更新請求中證件號碼的格式是否符合指定的證件類型，如果不符合則返回錯誤信息
-			if (!IdNumberValidator.IsValid((IDType)request.NewIdType,request.NewIdNumber))
+			// 按指定的证件类型校验证件号码格式。
+			if (!IdNumberValidator.IsValid(idType, request.NewIdNumber))
 			{
-				return UpdateIdentityDocumentResultDto.Fail(
-					(int)CustomerErrorCode.InvalidCustomerData,
-					"Invalid ID number format for the specified ID type.");
+				return UpdateIdentityDocumentResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Invalid ID number format for the specified ID type.");
 			}
 
 			try
 			{
-				// 從數據庫中獲取要更新的客戶信息，確保該客戶存在且未被刪除
+				// 从数据库中获取要更新的客户信息，确保该客户存在且未被删除
 				var existingCustomer = await ExecuteDbAsync<CustomerEntity?>(
 					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
-						return await _customerRepository.GetCustomerById(
-							request.CustomerId);
+						return await _customerRepository.GetCustomerById(request.CustomerId);
 					},
 					"GetCustomerByIdForIdentityDocumentUpdate");
 
-				// 如果客戶信息不存在或已經被刪除，則返回錯誤信息
+				// 如果客户信息不存在或已经被删除，则返回错误信息
 				if (existingCustomer == null || existingCustomer.IsDeleted)
 				{
-					return UpdateIdentityDocumentResultDto.Fail(
-						(int)CustomerErrorCode.CustomerNotFound,
-						"Customer not found or already removed.");
+					return UpdateIdentityDocumentResultDto.Fail((int)CustomerErrorCode.CustomerNotFound,"Customer not found or already removed.");
 				}
 
-				// 如果更新請求中的身份證明文件信息與現有的客戶信息完全相同，則返回錯誤信息，提示沒有檢測到任何變化
-				if (existingCustomer.IDType == (IDType)request.NewIdType &&
+				// 证件类型和号码都相同时，直接返回无变更错误。
+				if (existingCustomer.IDType == idType &&
 					existingCustomer.IDNumber == request.NewIdNumber)
 				{
-					return UpdateIdentityDocumentResultDto.Fail(
-						(int)CustomerErrorCode.InvalidCustomerData,
-						"No changes detected in the identity document information.");
+					return UpdateIdentityDocumentResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"No changes detected in the identity document information.");
 				}
 
 				var now = _timeProvider.Now();
 
-				// 在一個事務中更新客戶的身份證明文件信息，確保數據的一致性
-				var affectedRows = await ExecuteInTxAsync<int>(
+				// 在一个事务中更新客户的身份证件信息，确保数据的一致性
+				return await ExecuteInTxAsync<UpdateIdentityDocumentResultDto>(
 					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
 
-						return await _customerRepository.UpdateIdentityDocument(
+						// 更新客户的身份证件信息，包括证件类型、证件号码和更新时间
+						var affectedRows = await _customerRepository.UpdateIdentityDocument(
 							request.CustomerId,
 							request.NewIdType,
 							request.NewIdNumber,
 							now);
+
+						// 必须恰好更新一条客户记录，否则抛出异常，让事务封装回滚。
+						if (affectedRows != 1)
+						{
+							throw new CustomerOperationException(
+								CustomerErrorCode.CustomerUpdateFailed,
+								"Failed to update customer identity document information.");
+						}
+
+						// 返回成功的更新结果
+						return UpdateIdentityDocumentResultDto.SuccessDto();
 					},
 					"UpdateCustomerIdentityDocument");
-
-				// 如果更新操作失敗，則返回錯誤信息
-				if (affectedRows <= 0)
-				{
-					return UpdateIdentityDocumentResultDto.Fail(
-						(int)CustomerErrorCode.CustomerUpdateFailed,
-						"Failed to update customer identity document information.");
-				}
-
-				// 返回成功的更新結果
-				return UpdateIdentityDocumentResultDto.SuccessDto();
+			}
+			catch (CustomerOperationException ex)
+			{
+				// 保留业务错误码，包括数据库唯一约束转换出的 DuplicateCustomer。
+				return UpdateIdentityDocumentResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				return UpdateIdentityDocumentResultDto.Fail(
-					(int)CustomerErrorCode.UnableToOperateDb,
-					"Unable to operate the database.");
+				// 如果操作数据库时发生异常，则返回错误信息
+				return UpdateIdentityDocumentResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb,"Unable to operate the database.");
 			}
 		}
+
 		/// <summary>
 		/// 更新客戶KYC狀態方法，根據提供的更新請求信息更新客戶的KYC狀態，包括KYC審核結果和審核時間
 		/// </summary>
@@ -724,7 +717,7 @@ namespace ServerProject.Services
 		/// <returns>返回包含更新結果的UpdateKycStatusResultDto對象</returns>
 		public async Task<UpdateKycStatusResultDto> UpdateKycStatus(UpdateKycStatusRequest request)
 		{
-			// 驗證更新請求中KYC狀態是否有效，如果無效則返回錯誤信息
+			// 驗證更新請求中客戶ID是否有效，如果無效則返回錯誤信息
 			if (request == null || request.CustomerId <= 0)
 			{
 				return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.InvalidCustomerData,"Customer ID must be a positive integer.");
@@ -738,83 +731,94 @@ namespace ServerProject.Services
 
 			try
 			{
-				// 驗證更新請求中提供的KYC狀態是否有效，如果無效則返回錯誤信息
+				// 從數據庫中獲取要更新的客戶信息，確保該客戶存在且未被刪除
 				var existingCustomer = await ExecuteDbAsync<CustomerEntity?>(
-					async (dataAccess) =>
+					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
 						return await _customerRepository.GetCustomerById(request.CustomerId);
 					},
-					"GetCustomerByIdForKycStatusUpdate"
-				);
+					"GetCustomerByIdForKycStatusUpdate");
 
 				// 如果客戶信息不存在或已經被刪除，則返回錯誤信息
 				if (existingCustomer == null || existingCustomer.IsDeleted)
 				{
-					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.CustomerNotFound, "Customer not found or already removed.");
+					return UpdateKycStatusResultDto.Fail(
+						(int)CustomerErrorCode.CustomerNotFound,
+						"Customer not found or already removed.");
 				}
 
-				// 如果所获得的客户信息中缺少必要的身份证明文件信息（证件类型或证件号码），则无法进行KYC状态更新，返回错误信息
+				// KYC 审核要求证件资料完整，且证件号码符合对应类型的格式。
 				if (existingCustomer.IDType == null || string.IsNullOrEmpty(existingCustomer.IDNumber))
 				{
-					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed, "Cannot update KYC status because the customer's identity document information is incomplete.");
+					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed,"Cannot update KYC status because the customer's identity document information is incomplete.");
 				}
 
-				// 如果所获得的客户信息中的身份证明文件信息（证件类型和证件号码）无效，则无法进行KYC状态更新，返回错误信息
-				if (!IdNumberValidator.IsValid(existingCustomer.IDType.Value, existingCustomer.IDNumber))
+				// KYC 审核要求证件号码符合对应类型的格式。
+				if (!IdNumberValidator.IsValid(
+					existingCustomer.IDType.Value,
+					existingCustomer.IDNumber))
 				{
-					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed, "Cannot update KYC status because the customer's identity document information is invalid.");
+					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed,"Cannot update KYC status because the customer's identity document information is invalid.");
 				}
 
-				// 如果所获得的客户信息中既缺少聯繫電話又缺少電子郵件地址，則無法進行KYC狀態更新，返回錯誤信息
-				if (string.IsNullOrWhiteSpace(existingCustomer.Phone) && string.IsNullOrWhiteSpace(existingCustomer.Email))
+				// 电话和电子邮件至少需要提供一种。
+				if (string.IsNullOrWhiteSpace(existingCustomer.Phone) &&
+					string.IsNullOrWhiteSpace(existingCustomer.Email))
 				{
-					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed, "Cannot update KYC status because the customer's contact information is incomplete.");
+					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed,"Cannot update KYC status because the customer's contact information is incomplete.");
 				}
 
-				// 如果所获得的客户信息中的KYC狀態為null，則無法進行KYC狀態更新，返回錯誤信息
-				if (existingCustomer.KYCStatus == null)
+				// 取得KYC状态的当前值，如果当前值为 null，则返回错误信息，提示无法更新KYC状态，因为客户的当前KYC状态未定义
+				var currentKycStatus = existingCustomer.KYCStatus;
+				if (currentKycStatus == null)
 				{
-					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed, "Cannot update KYC status because the customer's current KYC status is undefined.");
+					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed,"Cannot update KYC status because the customer's current KYC status is undefined.");
 				}
 
-				// 如果KYC狀態的更新請求中的KYC狀態與現有的客戶信息中的KYC狀態进行比较后不合法，則返回錯誤信息，提示無法從現有的KYC狀態轉換到請求中的KYC狀態
-				if (!KycStatusRule.CanTransit((KYCStatus)existingCustomer.KYCStatus, request.KycStatus))
+				// 按业务规则检查当前状态是否允许转换到目标状态。
+				if (!KycStatusRule.CanTransit((KYCStatus)currentKycStatus, request.KycStatus))
 				{
-					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed, $"Cannot update KYC status from {existingCustomer.KYCStatus} to {request.KycStatus} due to invalid status transition.");
+					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.KYCVerificationFailed,$"Cannot update KYC status from {currentKycStatus} to {request.KycStatus} due to invalid status transition.");
 				}
 
-				// 獲取當前時間，用於設置客戶的更新時間
 				var now = _timeProvider.Now();
 
-				// 在一個事務中更新客戶的KYC狀態，確保數據的一致性
-				var isUpdated = await ExecuteInTxAsync<int>(
-					async (dataAccess) =>
+				// 在一个事务中更新客户的KYC状态，确保数据的一致性
+				return await ExecuteInTxAsync<UpdateKycStatusResultDto>(
+					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
-						return await _customerRepository.UpdateCustomerKycStatus(
+
+						// 更新客户的KYC状态，包括新的KYC状态和更新时间
+						var affectedRows = await _customerRepository.UpdateCustomerKycStatus(
 							request.CustomerId,
 							request.KycStatus,
-							now
-						);
-					},
-					"UpdateCustomerKycStatus"
-				);
+							now);
 
-				// 如果更新操作失敗，則返回錯誤信息
-				if (isUpdated <= 0)
-				{
-					return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.CustomerUpdateFailed, "Failed to update customer KYC status.");
-				}
+						// 必须恰好更新一条客户记录，否则抛出异常触发回滚。
+						if (affectedRows != 1)
+						{
+							throw new CustomerOperationException(
+								CustomerErrorCode.CustomerUpdateFailed,
+								"Failed to update customer KYC status.");
+						}
+
+						// 返回成功的更新结果
+						return UpdateKycStatusResultDto.SuccessDto();
+					},
+					"UpdateCustomerKycStatus");
+			}
+			catch (CustomerOperationException ex)
+			{
+				// 保留业务错误码，包括数据库唯一约束转换出的 DuplicateCustomer。
+				return UpdateKycStatusResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				// 如果操作數據庫時發生異常，則返回錯誤信息
-				return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb, "Unable to operate the database.");
+				// 如果操作数据库时发生异常，则返回错误信息
+				return UpdateKycStatusResultDto.Fail((int)CustomerErrorCode.UnableToOperateDb,"Unable to operate the database.");
 			}
-
-			// 返回成功的更新結果
-			return UpdateKycStatusResultDto.SuccessDto();
 		}
 	}
 

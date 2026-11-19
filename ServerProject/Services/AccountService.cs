@@ -79,149 +79,141 @@ namespace ServerProject.Services
 			// 檢查request是否為null
 			if (request == null)
 			{
-				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed, "The request is null.");
+				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The request is null.");
 			}
 
 			// 檢查當前客戶是否已認證
 			if (!_currentCustomer.IsAuthenticated)
 			{
-				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "The current customer is not authenticated.");
+				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"The current customer is not authenticated.");
 			}
 
-			// 從當前客戶獲取客戶ID
 			int customerId;
-
 			try
 			{
+				// 從當前客戶獲取客戶ID
 				customerId = _currentCustomer.CustomerId;
 			}
 			catch (InvalidOperationException)
 			{
-				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
-				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
+				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"Failed to retrieve the current customer ID.");
 			}
 
-			// 检查账户ID是否有效
+			// 檢查帳戶ID是否有效
 			if (request.AccountId <= 0)
 			{
-				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed, "The account ID is invalid.");
+				// 如果帳戶ID無效，返回驗證失敗錯誤
+				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The account ID is invalid.");
 			}
 
 			try
 			{
-				// 验证当前客户是否存在
+				// 查找客戶資料，確保客戶存在且未被刪除
 				var customer = await ExecuteDbAsync<CustomerEntity?>(
 					async dataAccess =>
 					{
 						_customerRepository.DataAccess = dataAccess;
 						return await _customerRepository.GetCustomerById(customerId);
-					}
-				);
+					});
 
-				// 验证客户是否存在
+				// 驗證客戶是否存在，如果不存在，返回客戶未找到錯誤
 				if (customer == null)
 				{
-					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.CustomerNotFound, "The customer does not exist.");
+					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.CustomerNotFound,"The customer does not exist.");
 				}
 
-				// 验证客户是否已被删除
+				// 驗證客戶是否已被刪除，如果已被刪除，返回無效客戶資料錯誤
 				if (customer.IsDeleted)
 				{
-					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData, "The customer has been deleted.");
+					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData,"The customer has been deleted.");
 				}
 
-				// 查询账户
-				var myAccount = await ExecuteDbAsync<AccountEntity?>(
+				// 查找帳戶資料，確保帳戶存在且屬於當前客戶
+				var account = await ExecuteDbAsync<AccountEntity?>(
 					async dataAccess =>
 					{
 						_accountRepository.DataAccess = dataAccess;
-						return await _accountRepository.GetAccountByIdAndCustomerId(request.AccountId, customerId);
-					}
-				);
+						return await _accountRepository.GetAccountByIdAndCustomerId(
+							request.AccountId,
+							customerId);
+					});
 
-				// 如果账户不存在，返回错误
-				if (myAccount == null)
+				// 驗證帳戶是否存在，如果不存在，返回帳戶未找到錯誤
+				if (account == null)
 				{
-					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountNotFound, "The account does not exist.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountNotFound,"The account does not exist.");
 				}
 
-				// 如果账户已关闭，返回错误
-				if (myAccount.Status == AccountStatus.Closed)
+				// 驗證帳戶狀態，如果帳戶已關閉，返回帳戶已關閉錯誤
+				if (account.Status == AccountStatus.Closed)
 				{
-					return CloseMyAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountAlreadyClosed,
-						"The account has already been closed.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyClosed,"The account has already been closed.");
 				}
 
-				// 如果账户不是活动状态，返回错误
-				if (myAccount.Status != AccountStatus.Active)
+				// 驗證帳戶狀態，如果帳戶不是活動狀態，返回帳戶不可用錯誤
+				if (account.Status != AccountStatus.Active)
 				{
-					return CloseMyAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountNotAvailable,
-						"The account is not active.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountNotAvailable,"The account is not active.");
 				}
 
-				// 如果账户余额不为零，返回错误
-				if (myAccount.Balance != 0)
+				// 驗證帳戶餘額，如果帳戶餘額不為零，返回帳戶餘額不為零錯誤
+				if (account.Balance != 0)
 				{
-					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountBalanceNotZero, "The account balance is not zero.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountBalanceNotZero,"The account balance is not zero.");
 				}
 
-				// 获取当前时间
 				var now = _timeProvider.Now();
 
-				// 关闭账户，并在同一个事务内停用其下的卡片。
-				var count = await ExecuteInTxAsync<int>(
+				// 在事務中執行關閉帳戶操作，確保帳戶狀態更新和卡片停用的一致性
+				return await ExecuteInTxAsync<CloseMyAccountResultDto>(
 					async dataAccess =>
 					{
 						_accountRepository.DataAccess = dataAccess;
 						_cardRepository.DataAccess = dataAccess;
 
-						// 条件更新会锁定账户行。
-						// 状态或余额已变化时，不执行后面的卡片停用。
+						// 更新帳戶狀態為關閉，並要求帳戶餘額為零
 						var affectedRows =
 							await _accountRepository.UpdateAccountStatusIfCurrentStatus(
-								myAccount.AccountId,
-								myAccount.CustomerId,
+								account.AccountId,
+								account.CustomerId,
 								AccountStatus.Active,
 								AccountStatus.Closed,
 								now,
 								requireZeroBalance: true);
 
-						if (affectedRows == 0)
+						// 如果更新影響的行數不為1，表示帳戶狀態或餘額可能已經改變，拋出帳戶操作異常
+						if (affectedRows != 1)
 						{
-							return 0;
+							throw new AccountOperationException(
+								AccountErrorCode.AccountStatusInvalid,
+								"Failed to close the account. The account status or balance may have changed.");
 						}
 
-						// 账户更新成功后，停用其下所有尚未停用的卡片。
-						// 返回 0 也是正常情况：可能没有卡片，或卡片已全部停用。
-					    _ = await _cardRepository.DeactivateAllCards(
-							myAccount.AccountId,
+						// 没有需要停用的卡片时，影响零行也属于正常情况。
+						await _cardRepository.DeactivateAllCards(
+							account.AccountId,
 							CardStatus.Inactive,
 							now,
 							now);
 
-						return affectedRows;
-					});
-
-				// 如果更新操作未成功，返回错误
-				if (count <= 0)
-				{
-					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountStatusInvalid, "Failed to close the account. The account status or balance may have changed.");
-				}
-
-				// 返回关闭账户成功结果
-				return CloseMyAccountResultDto.SuccessDto(
-					myAccount.AccountId,
-					AccountStatus.Closed,
-					now,
-					now
-				);
+						// 正常返回後，由 ServiceBase 提交事務。
+						return CloseMyAccountResultDto.SuccessDto(
+							account.AccountId,
+							AccountStatus.Closed,
+							now,
+							now);
+					},
+					"CloseMyAccount");
+			}
+			catch (AccountOperationException ex)
+			{
+				// ServiceBase 已回滾，再轉換為失敗結果。
+				return CloseMyAccountResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				// 捕获数据库异常，返回数据库操作错误
-				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
+				// ServiceBase 已回滾，再轉換為失敗結果。
+				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb,"A database error occurred during the operation.");
 			}
 		}
 
@@ -556,52 +548,48 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">開戶請求參數</param>
 		/// <returns>返回開戶結果</returns>
-		public async Task<OpenAccountResultDto> OpenAccount(
-			OpenAccountRequest request)
+		public async Task<OpenAccountResultDto> OpenAccount(OpenAccountRequest request)
 		{
+			// 檢查request是否為null
 			if (request == null)
 			{
-				return OpenAccountResultDto.Failure(
-					(int)AccountErrorCode.ValidationFailed,
-					"The request is null.");
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The request is null.");
 			}
 
+			// 檢查當前客戶是否已認證
 			if (!_currentCustomer.IsAuthenticated)
 			{
-				return OpenAccountResultDto.Failure(
-					(int)CustomerErrorCode.UnauthorizedAccess,
-					"The current customer is not authenticated.");
+				return OpenAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"The current customer is not authenticated.");
 			}
 
 			int customerId;
 
 			try
 			{
+				// 從當前客戶獲取客戶ID
 				customerId = _currentCustomer.CustomerId;
 			}
 			catch (InvalidOperationException)
 			{
-				return OpenAccountResultDto.Failure(
-					(int)CustomerErrorCode.UnauthorizedAccess,
-					"Failed to retrieve the current customer ID.");
+				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
+				return OpenAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"Failed to retrieve the current customer ID.");
 			}
 
+			// 檢查帳戶類型是否有效，如果無效，返回錯誤
 			if (!Enum.IsDefined(typeof(AccountType), request.AccountType))
 			{
-				return OpenAccountResultDto.Failure(
-					(int)AccountErrorCode.InvalidAccountType,
-					"The account type is invalid.");
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.InvalidAccountType,"The account type is invalid.");
 			}
 
+			// 檢查貨幣代碼是否有效，如果無效，返回錯誤
 			if (!Enum.IsDefined(typeof(CurrencyCode), request.Currency))
 			{
-				return OpenAccountResultDto.Failure(
-					(int)AccountErrorCode.InvalidCurrency,
-					"The currency code is invalid.");
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.InvalidCurrency,"The currency code is invalid.");
 			}
 
 			try
 			{
+				// 在事務中執行開戶操作
 				return await ExecuteInTxAsync<OpenAccountResultDto>(
 					async dataAccess =>
 					{
@@ -613,18 +601,16 @@ namespace ServerProject.Services
 							await _customerRepository.GetCustomerByIdForUpdate(
 								customerId);
 
+						// 如果客戶不存在，返回錯誤
 						if (customer == null)
 						{
-							return OpenAccountResultDto.Failure(
-								(int)CustomerErrorCode.CustomerNotFound,
-								"The customer does not exist.");
+							return OpenAccountResultDto.Failure((int)CustomerErrorCode.CustomerNotFound,"The customer does not exist.");
 						}
 
+						// 如果客戶已被刪除，返回錯誤
 						if (customer.IsDeleted)
 						{
-							return OpenAccountResultDto.Failure(
-								(int)CustomerErrorCode.InvalidCustomerData,
-								"The customer has been deleted.");
+							return OpenAccountResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData,"The customer has been deleted.");
 						}
 
 						// 持有客户锁后，再检查同币种未关闭账户。
@@ -634,16 +620,16 @@ namespace ServerProject.Services
 									customerId,
 									request.Currency.ToString());
 
+						// 如果客戶已經有同幣種的未關閉帳戶，返回錯誤
 						if (hasNonClosedAccount)
 						{
-							return OpenAccountResultDto.Failure(
-								(int)AccountErrorCode.AccountAlreadyExists,
-								"The customer already has an available account with the same currency.");
+							return OpenAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyExists,"The customer already has an available account with the same currency.");
 						}
 
 						// Now() 按项目约定返回 UTC。
 						var now = _timeProvider.Now();
 
+						// 創建新的帳戶實體
 						var newAccount = new AccountEntity
 						{
 							CustomerId = customerId,
@@ -656,9 +642,10 @@ namespace ServerProject.Services
 							UpdateDate = now
 						};
 
-						var accountId =
-							await _accountRepository.InsertAccount(newAccount);
+						// 插入新的帳戶到資料庫
+						var accountId = await _accountRepository.InsertAccount(newAccount);
 
+						// 如果插入帳戶失敗，拋出異常
 						if (accountId <= 0)
 						{
 							throw new AccountOperationException(
@@ -679,15 +666,12 @@ namespace ServerProject.Services
 			catch (AccountOperationException ex)
 			{
 				// ServiceBase 已回滚，再转换为失败结果。
-				return OpenAccountResultDto.Failure(
-					(int)ex.ErrorCode,
-					ex.Message);
+				return OpenAccountResultDto.Failure((int)ex.ErrorCode,ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				return OpenAccountResultDto.Failure(
-					(int)AccountErrorCode.UnableToOperateDb,
-					"A database error occurred during the operation.");
+				// ServiceBase 已回滚，再转换为失败结果。
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb,"A database error occurred during the operation.");
 			}
 		}
 
@@ -696,9 +680,7 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">開戶並初始存款請求參數</param>
 		/// <returns>返回開戶並初始存款結果</returns>
-		public async Task<OpenAccountWithInitialDepositResultDto>
-			OpenAccountWithInitialDeposit(
-				OpenAccountWithInitialDepositRequest request)
+		public async Task<OpenAccountWithInitialDepositResultDto>OpenAccountWithInitialDeposit(OpenAccountWithInitialDepositRequest request)
 		{
 			if (request == null)
 			{

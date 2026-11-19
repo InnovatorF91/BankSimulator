@@ -56,79 +56,68 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">包含账户ID和强制关闭理由的请求对象</param>
 		/// <returns>强制关闭账户结果 DTO</returns>
+		/// <summary>
+		/// 强制关闭指定账户，并在同一事务内停用卡片、写入操作日志。
+		/// </summary>
 		public async Task<ForceCloseAccountResultDto> ForceCloseAccount(ForceCloseAccountRequest request)
 		{
-			// 检查 request 是否为空
+			// 验证请求对象是否为 null，如果是，则返回失败结果
 			if (request == null)
 			{
-				return ForceCloseAccountResultDto.Failure(
-					(int)AccountErrorCode.ValidationFailed,
-					"The request is null.");
+				return ForceCloseAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The request is null.");
 			}
 
-			// 检查账户ID是否有效
+			// 验证账户ID是否有效，如果无效，则返回失败结果
 			if (request.AccountId <= 0)
 			{
-				return ForceCloseAccountResultDto.Failure(
-					(int)AccountErrorCode.ValidationFailed,
-					"The account ID is invalid.");
+				return ForceCloseAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The account ID is invalid.");
 			}
 
 			try
 			{
-				// 取得账户
+				// 获取账户信息，并检查账户是否存在
 				var account = await ExecuteDbAsync<AccountEntity?>(
 					async dataAccess =>
 					{
 						_accountRepository.DataAccess = dataAccess;
-
-						return await _accountRepository.GetAccountById(
-							request.AccountId);
+						return await _accountRepository.GetAccountById(request.AccountId);
 					},
 					"GetAccountById");
 
-				// 账户不存在
+				// 如果账户不存在，则返回失败结果
 				if (account == null)
 				{
-					return ForceCloseAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountNotFound,
-						"The account does not exist.");
+					return ForceCloseAccountResultDto.Failure((int)AccountErrorCode.AccountNotFound,"The account does not exist.");
 				}
 
-				// 已关闭账户不能重复关闭
+				// 如果账户已关闭，则返回失败结果
 				if (account.Status == AccountStatus.Closed)
 				{
-					return ForceCloseAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountAlreadyClosed,
-						"The account has already been closed.");
+					return ForceCloseAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyClosed,"The account has already been closed.");
 				}
 
-				// 余额不为0不能关闭
+				// 如果账户余额不为零，则返回失败结果
 				if (account.Balance != 0)
 				{
-					return ForceCloseAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountBalanceNotZero,
-						"The account balance is not zero.");
+					return ForceCloseAccountResultDto.Failure((int)AccountErrorCode.AccountBalanceNotZero,"The account balance is not zero.");
 				}
 
-				// ForceClose 只允许 Active / Frozen
-				if (account.Status != AccountStatus.Active &&
-					account.Status != AccountStatus.Frozen)
+				// 如果账户状态不是活跃或冻结，则返回失败结果
+				if (account.Status != AccountStatus.Active && account.Status != AccountStatus.Frozen)
 				{
-					return ForceCloseAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"The account status is invalid for force closing.");
+					return ForceCloseAccountResultDto.Failure((int)AccountErrorCode.AccountStatusInvalid,"The account status is invalid for force closing.");
 				}
 
 				var now = _timeProvider.Now();
 
-				// 关闭账户、停用卡片并记录操作，统一提交或回滚。
-				var count = await ExecuteInTxAsync<int>(
+				// 执行强制关闭账户操作，并在同一事务中停用卡片、写入操作日志
+				return await ExecuteInTxAsync<ForceCloseAccountResultDto>(
 					async dataAccess =>
 					{
 						_accountRepository.DataAccess = dataAccess;
 						_cardRepository.DataAccess = dataAccess;
 
+						// 更新账户状态为关闭，并检查当前状态是否为活跃或冻结
 						var updateCount =
 							await _accountRepository.UpdateAccountStatusIfCurrentStatus(
 								account.AccountId,
@@ -138,20 +127,23 @@ namespace ServerProject.Services
 								now,
 								requireZeroBalance: true);
 
+						// 如果更新操作未成功，抛出异常
 						if (updateCount <= 0)
 						{
-							return 0;
+							throw new AccountOperationException(
+								AccountErrorCode.AccountStatusInvalid,
+								"Failed to force close the account. The account status or balance may have changed.");
 						}
 
-						// 停用该账户下的卡片。
-						// 没有卡片或卡片已经停用时，返回 0 也属于正常情况。
-						_ = await _cardRepository.DeactivateAllCards(
+						// 没有需要停用的卡片时，影响零行也属于正常情况。
+						await _cardRepository.DeactivateAllCards(
 							account.AccountId,
 							CardStatus.Inactive,
 							now,
 							now);
 
-						await _accountRepository.InsertAccountOperationLog(
+						// 在同一事务中插入账户操作日志
+						var operationLogId = await _accountRepository.InsertAccountOperationLog(
 							new AccountOperationLogEntity
 							{
 								AccountId = account.AccountId,
@@ -164,30 +156,32 @@ namespace ServerProject.Services
 								OperatedAt = now
 							});
 
-						return updateCount;
-					});
+						// 如果插入操作日志失败，抛出异常
+						if (operationLogId <= 0)
+						{
+							throw new AccountOperationException(
+								AccountErrorCode.UnableToOperateDb,
+								"Failed to insert the account operation log.");
+						}
 
-				// 如果操作数为0，则返回失败Dto
-				if (count <= 0)
-				{
-					return ForceCloseAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"Failed to force close the account. The account status or balance may have changed.");
-				}
-
-				// 返回成功Dto
-				return ForceCloseAccountResultDto.SuccessDto(
-					account.AccountId,
-					AccountStatus.Closed,
-					now,
-					now);
+						// 返回成功的强制关闭账户结果 DTO
+						return ForceCloseAccountResultDto.SuccessDto(
+							account.AccountId,
+							AccountStatus.Closed,
+							now,
+							now);
+					},
+					"ForceCloseAccount");
+			}
+			catch (AccountOperationException ex)
+			{
+				// 捕获账户操作异常，返回相应的失败结果 DTO
+				return ForceCloseAccountResultDto.Failure((int)ex.ErrorCode,ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				// 捕获数据库异常，返回数据库操作错误
-				return ForceCloseAccountResultDto.Failure(
-					(int)AccountErrorCode.UnableToOperateDb,
-					"A database error occurred during the operation.");
+				// 捕获数据库操作异常，返回数据库操作失败的结果 DTO
+				return ForceCloseAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb,"A database error occurred during the operation.");
 			}
 		}
 
@@ -196,27 +190,26 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">包含账户ID和冻结原因的请求物件<param/>
 		/// <returns>包含冻结账户结果的DTO<returns/>
+		/// <summary>
+		/// 冻结指定账户，并在同一事务中记录操作日志。
+		/// </summary>
 		public async Task<FreezeAccountResultDto> FreezeAccount(FreezeAccountRequest request)
 		{
-			// 驗證請求物件是否為 null, 如果是，返回失敗結果
+			// 验证请求对象是否为 null，如果是，则返回失败结果
 			if (request == null)
 			{
-				return FreezeAccountResultDto.Failure(
-					(int)AccountErrorCode.ValidationFailed,
-					"The request is null.");
+				return FreezeAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The request is null.");
 			}
 
-			// 驗證帳戶ID是否有效, 如果無效，返回失敗結果
+			// 验证账户ID是否有效，如果无效，则返回失败结果
 			if (request.AccountId <= 0)
 			{
-				return FreezeAccountResultDto.Failure(
-					(int)AccountErrorCode.ValidationFailed,
-					"The account ID is invalid.");
+				return FreezeAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The account ID is invalid.");
 			}
 
 			try
 			{
-				// 取得帳戶資料，並檢查帳戶是否存在
+				// 获取账户信息，并检查账户是否存在
 				var account = await ExecuteDbAsync<AccountEntity?>(
 					async dataAccess =>
 					{
@@ -225,47 +218,39 @@ namespace ServerProject.Services
 					},
 					"GetAccountById");
 
-				// 檢查帳戶是否存在，如果不存在，返回失敗結果
+				// 检查账户是否存在，如果不存在，则返回失败结果
 				if (account == null)
 				{
-					return FreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountNotFound,
-						"The account does not exist.");
+					return FreezeAccountResultDto.Failure((int)AccountErrorCode.AccountNotFound,"The account does not exist.");
 				}
 
 				// 检查账户状态是否已关闭，如果已关闭，则返回失败结果
 				if (account.Status == AccountStatus.Closed)
 				{
-					return FreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountAlreadyClosed,
-						"The account has already been closed.");
+					return FreezeAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyClosed,"The account has already been closed.");
 				}
 
-				// 检查账户是否已冻结，如果已冻结，则返回失败结果
+				// 检查账户状态是否已冻结，如果已冻结，则返回失败结果
 				if (account.Status == AccountStatus.Frozen)
 				{
-					return FreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"The account is already frozen.");
+					return FreezeAccountResultDto.Failure((int)AccountErrorCode.AccountStatusInvalid,"The account is already frozen.");
 				}
 
-				// 检查账户是否处于活跃状态，如果不是，则返回失败结果
+				// 检查账户状态是否为活跃状态，如果不是，则返回失败结果
 				if (account.Status != AccountStatus.Active)
 				{
-					return FreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"The account status is invalid for freezing.");
+					return FreezeAccountResultDto.Failure((int)AccountErrorCode.AccountStatusInvalid,"The account status is invalid for freezing.");
 				}
 
-				// 取得当前时间
 				var now = _timeProvider.Now();
 
-				// 执行状态更新操作
-				var count = await ExecuteInTxAsync<int>(
+				// 执行冻结账户操作，并在同一事务中记录操作日志
+				return await ExecuteInTxAsync<FreezeAccountResultDto>(
 					async dataAccess =>
 					{
 						_accountRepository.DataAccess = dataAccess;
 
+						// 更新账户状态为冻结，并检查当前状态是否为活跃
 						var updateCount = await _accountRepository.UpdateAccountStatusIfCurrentStatus(
 							account.AccountId,
 							account.CustomerId,
@@ -274,12 +259,16 @@ namespace ServerProject.Services
 							now,
 							requireZeroBalance: false);
 
+						// 如果更新操作未成功，抛出异常
 						if (updateCount <= 0)
 						{
-							return 0;
+							throw new AccountOperationException(
+								AccountErrorCode.AccountStatusInvalid,
+								"Failed to freeze the account. The account status may have changed.");
 						}
 
-						await _accountRepository.InsertAccountOperationLog(
+						// 在同一事务中插入账户操作日志
+						var operationLogId = await _accountRepository.InsertAccountOperationLog(
 							new AccountOperationLogEntity
 							{
 								AccountId = account.AccountId,
@@ -292,30 +281,31 @@ namespace ServerProject.Services
 								OperatedAt = now
 							});
 
-						return updateCount;
+						// 如果插入操作日志失败，抛出异常
+						if (operationLogId <= 0)
+						{
+							throw new AccountOperationException(
+								AccountErrorCode.UnableToOperateDb,
+								"Failed to insert the account operation log.");
+						}
+
+						// 返回成功的冻结账户结果 DTO
+						return FreezeAccountResultDto.SuccessDto(
+							account.AccountId,
+							AccountStatus.Frozen,
+							now);
 					},
 					"FreezeAccount");
-
-				// 如果更新操作未成功，返回错误
-				if (count <= 0)
-				{
-					return FreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"Failed to freeze the account. The account status may have changed.");
-				}
-
-				// 返回成功冻结账户结果的DTO
-				return FreezeAccountResultDto.SuccessDto(
-					account.AccountId,
-					AccountStatus.Frozen,
-					now);
+			}
+			catch (AccountOperationException ex)
+			{
+				// 捕获账户操作异常，返回相应的失败结果 DTO
+				return FreezeAccountResultDto.Failure((int)ex.ErrorCode,ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				// 捕获数据库异常，返回数据库操作错误
-				return FreezeAccountResultDto.Failure(
-					(int)AccountErrorCode.UnableToOperateDb,
-					"A database error occurred during the operation.");
+				// 捕获数据库操作异常，返回数据库操作失败的结果 DTO
+				return FreezeAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb,"A database error occurred during the operation.");
 			}
 		}
 
@@ -653,27 +643,26 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">包含账户ID和解冻原因的请求物件</param>
 		/// <returns>包含解冻账户结果的DTO</returns>
+		/// <summary>
+		/// 解冻指定账户，并在同一事务中记录操作日志。
+		/// </summary>
 		public async Task<UnfreezeAccountResultDto> UnfreezeAccount(UnfreezeAccountRequest request)
 		{
-			// 驗證請求物件是否為 null, 如果是，返回失敗結果
+			// 验证请求对象是否为 null，如果是，则返回失败结果
 			if (request == null)
 			{
-				return UnfreezeAccountResultDto.Failure(
-					(int)AccountErrorCode.ValidationFailed,
-					"The request is null.");
+				return UnfreezeAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The request is null.");
 			}
 
-			// 驗證帳戶ID是否有效, 如果無效，返回失敗結果
+			// 验证账户ID是否有效，如果无效，则返回失败结果
 			if (request.AccountId <= 0)
 			{
-				return UnfreezeAccountResultDto.Failure(
-					(int)AccountErrorCode.ValidationFailed,
-					"The account ID is invalid.");
+				return UnfreezeAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The account ID is invalid.");
 			}
 
 			try
 			{
-				// 取得帳戶資料，並檢查帳戶是否存在
+				// 取得账户信息，并检查账户是否存在
 				var account = await ExecuteDbAsync<AccountEntity?>(
 					async dataAccess =>
 					{
@@ -682,97 +671,94 @@ namespace ServerProject.Services
 					},
 					"GetAccountById");
 
-				// 檢查帳戶是否存在，如果不存在，返回失敗結果
+				// 如果账户不存在，则返回失败结果
 				if (account == null)
 				{
-					return UnfreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountNotFound,
-						"The account does not exist.");
+					return UnfreezeAccountResultDto.Failure((int)AccountErrorCode.AccountNotFound,"The account does not exist.");
 				}
 
-				// 检查账户状态是否已关闭，如果已关闭，则返回失败结果
+				// 如果账户已关闭，则返回失败结果
 				if (account.Status == AccountStatus.Closed)
 				{
-					return UnfreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountAlreadyClosed,
-						"The account has already been closed.");
+					return UnfreezeAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyClosed,"The account has already been closed.");
 				}
 
-				// 检查账户是否已处在活跃状态，如果是，则返回失败结果
+				// 如果账户已激活，则返回失败结果
 				if (account.Status == AccountStatus.Active)
 				{
-					return UnfreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"The account is already active.");
+					return UnfreezeAccountResultDto.Failure((int)AccountErrorCode.AccountStatusInvalid,"The account is already active.");
 				}
 
-				// 检查账户是否处于冻结状态，如果不是，则返回失败结果
+				// 如果账户状态不是冻结状态，则返回失败结果
 				if (account.Status != AccountStatus.Frozen)
 				{
-					return UnfreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"The account status is invalid for unfreezing.");
+					return UnfreezeAccountResultDto.Failure((int)AccountErrorCode.AccountStatusInvalid,"The account status is invalid for unfreezing.");
 				}
 
-				// 取得当前时间
 				var now = _timeProvider.Now();
 
-				// 执行状态更新操作
-				var count = await ExecuteInTxAsync<int>(
+				// 执行解冻账户操作，并在同一事务中记录操作日志
+				return await ExecuteInTxAsync<UnfreezeAccountResultDto>(
 					async dataAccess =>
 					{
 						_accountRepository.DataAccess = dataAccess;
 
+						// 更新账户状态为激活，并检查当前状态是否为冻结
 						var updateCount = await _accountRepository.UpdateAccountStatusIfCurrentStatus(
 							account.AccountId,
 							account.CustomerId,
 							AccountStatus.Frozen,
 							AccountStatus.Active,
 							now,
-							requireZeroBalance:false);
+							requireZeroBalance: false);
 
+						// 如果更新操作未成功，抛出异常
 						if (updateCount <= 0)
 						{
-							return 0;
+							throw new AccountOperationException(
+								AccountErrorCode.AccountStatusInvalid,
+								"Failed to unfreeze the account. The account status may have changed.");
 						}
 
-						await _accountRepository.InsertAccountOperationLog(
-	                    new AccountOperationLogEntity
-	                    {
-	                    	AccountId = account.AccountId,
-	                    	CustomerId = account.CustomerId,
-	                    	OperationType = AccountOperationType.Unfreeze,
-	                    	OldStatus = AccountStatus.Frozen,
-	                    	NewStatus = AccountStatus.Active,
-	                    	Reason = request.Reason,
-	                    	OperatedBy = null,
-	                    	OperatedAt = now
-	                    });
-	                    
-						return updateCount;
+						// 在同一事务中插入账户操作日志
+						var operationLogId = await _accountRepository.InsertAccountOperationLog(
+							new AccountOperationLogEntity
+							{
+								AccountId = account.AccountId,
+								CustomerId = account.CustomerId,
+								OperationType = AccountOperationType.Unfreeze,
+								OldStatus = AccountStatus.Frozen,
+								NewStatus = AccountStatus.Active,
+								Reason = request.Reason,
+								OperatedBy = null,
+								OperatedAt = now
+							});
+
+						// 如果插入操作日志失败，抛出异常
+						if (operationLogId <= 0)
+						{
+							throw new AccountOperationException(
+								AccountErrorCode.UnableToOperateDb,
+								"Failed to insert the account operation log.");
+						}
+
+						// 返回成功的解冻账户结果 DTO
+						return UnfreezeAccountResultDto.SuccessDto(
+							account.AccountId,
+							AccountStatus.Active,
+							now);
 					},
 					"UnfreezeAccount");
-
-				// 如果更新操作未成功，返回错误
-				if (count <= 0)
-				{
-					return UnfreezeAccountResultDto.Failure(
-						(int)AccountErrorCode.AccountStatusInvalid,
-						"Failed to unfreeze the account. The account status may have changed.");
-				}
-
-				// 返回成功解冻账户结果的DTO
-				return UnfreezeAccountResultDto.SuccessDto(
-					account.AccountId,
-					AccountStatus.Active,
-					now);
+			}
+			catch (AccountOperationException ex)
+			{
+				// 捕获账户操作异常，返回相应的失败结果 DTO
+				return UnfreezeAccountResultDto.Failure((int)ex.ErrorCode,ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				// 捕获数据库异常，返回数据库操作错误
-				return UnfreezeAccountResultDto.Failure(
-					(int)AccountErrorCode.UnableToOperateDb,
-					"A database error occurred during the operation.");
+				// 捕获数据库操作异常，返回数据库操作失败的结果 DTO
+				return UnfreezeAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb,"A database error occurred during the operation.");
 			}
 		}
 	}
