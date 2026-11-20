@@ -1516,88 +1516,6 @@ namespace ServerProject.Services
 				return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to update authentication type due to a database error.");
 			}
 		}
-
-		/// <summary>
-		/// 驗證會話是否有效
-		/// </summary>
-		/// <param name="request">驗證會話請求，包含會話ID</param>
-		/// <returns>true:有效/false:无效</returns>
-		public async Task<ValidateSessionResultDto> ValidateSession(ValidateSessionRequest request)
-		{
-			// 驗證輸入的請求是否為空或會話ID是否為空，如果是，則返回錯誤DTO
-			if (request == null || request.SessionId == Guid.Empty)
-			{
-				return ValidateSessionResultDto.Fail((int)AuthErrorCode.SessionNotFound,"Session not found or invalid.");
-			}
-
-			// 提取會話ID以便後續操作
-			var sessionId = request.SessionId;
-
-			try
-			{
-				// 根據會話ID從數據庫中獲取對應的會話實體
-				var session = await ExecuteDbAsync<CustomerSessionEntity?>(
-					async dataAccess =>
-					{
-						_customerSessionRepository.DataAccess = dataAccess;
-						return await _customerSessionRepository.GetSessionById(sessionId);
-					},
-					"GetSessionById");
-
-				// 驗證會話實體是否存在且有效，如果不存在或無效，則返回錯誤DTO
-				if (session == null || !session.IsValid)
-				{
-					return ValidateSessionResultDto.Fail(
-						(int)AuthErrorCode.SessionNotFound,
-						"Session not found or invalid.");
-				}
-
-				var now = _timeProvider.Now();
-
-				// 驗證會話是否已經過期，如果已經過期，則使會話無效並返回錯誤DTO
-				if (session.ExpiredAt < now)
-				{
-					// 如果會話已經過期，則在一個事務中使會話無效
-					await ExecuteInTxAsync(
-						async dataAccess =>
-						{
-							_customerSessionRepository.DataAccess = dataAccess;
-
-							// 使會話無效
-							var affectedRows = await _customerSessionRepository.InvalidateSession(
-								sessionId,
-								now);
-
-							// 驗證使會話無效的操作是否成功，如果不成功，則拋出異常
-							if (affectedRows != 1)
-							{
-								throw new AuthOperationException(
-									AuthErrorCode.ValidationFailed,
-									"Failed to invalidate expired session.");
-							}
-						},
-						"InvalidateSession");
-
-					// 返回會話已經過期的錯誤DTO
-					return ValidateSessionResultDto.Fail(
-						(int)AuthErrorCode.SessionExpired,
-						"Session has expired.");
-				}
-
-				// 如果會話存在且有效，則返回成功DTO
-				return ValidateSessionResultDto.SuccessDto();
-			}
-			catch (AuthOperationException ex)
-			{
-				// 如果在驗證會話操作中發生自定義異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
-				return ValidateSessionResultDto.Fail((int)ex.ErrorCode, ex.Message);
-			}
-			catch (UnableToOperateDBException)
-			{
-				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，表示無法操作資料庫
-				return ValidateSessionResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to validate session due to a database error.");
-			}
-		}
 	}
 
 	public interface IAuthService
@@ -1629,13 +1547,6 @@ namespace ServerProject.Services
 		/// <param name="request">確認啟用雙重認證請求，包含用戶ID和雙重認證代碼</param>
 		/// <returns>任務結果，包含受影響的行數</returns>
 		Task<ConfirmEnableTwoFactorResultDto> ConfirmEnableTwoFactor(ConfirmEnableTwoFactorRequest request);
-
-		/// <summary>
-		/// 驗證會話是否有效
-		/// </summary>
-		/// <param name="request">驗證會話請求，包含會話ID</param>
-		/// <returns>true:有效/false:无效</returns>
-		Task<ValidateSessionResultDto> ValidateSession(ValidateSessionRequest request);
 
 		/// <summary>
 		/// 更新會話的最後活動時間

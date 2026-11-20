@@ -28,9 +28,7 @@ namespace ServerProject.Middlewares
 		/// <param name="context"> HTTP上下文</param>
 		/// <param name="sessionAuthenticationService"> 会话认证服务</param>
 		/// <returns> 一个表示异步操作的任务</returns>
-		public async Task InvokeAsync(
-			HttpContext context,
-			ISessionAuthenticationService sessionAuthenticationService)
+		public async Task InvokeAsync(HttpContext context,ISessionAuthenticationService sessionAuthenticationService)
 		{
 			// 如果用户已经通过其他方式认证，直接调用下一个中间件
 			if (context.User?.Identity?.IsAuthenticated == true)
