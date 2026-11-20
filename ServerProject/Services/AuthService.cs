@@ -250,13 +250,13 @@ namespace ServerProject.Services
 						_refreshTokenRepository.DataAccess = dataAccess;
 						_customerSessionRepository.DataAccess = dataAccess;
 
-						// 撤銷用戶的所有刷新令牌，以防止舊的刷新令牌被濫用
-						await _refreshTokenRepository.RevokeAllRefreshTokens(
+						// 使用戶的所有會話無效，以防止舊的會話被濫用
+						await _customerSessionRepository.InvalidateAllSessions(
 							request.CustomerId,
 							now);
 
-						// 使用戶的所有會話無效，以防止舊的會話被濫用
-						await _customerSessionRepository.InvalidateAllSessions(
+						// 撤銷用戶的所有刷新令牌，以防止舊的刷新令牌被濫用
+						await _refreshTokenRepository.RevokeAllRefreshTokens(
 							request.CustomerId,
 							now);
 
@@ -401,13 +401,13 @@ namespace ServerProject.Services
 								"Failed to mark the reset token as used.");
 						}
 
-						// 撤銷用戶的所有刷新令牌，以防止舊的刷新令牌被濫用
-						await _refreshTokenRepository.RevokeAllRefreshTokens(
+						// 使用戶的所有會話無效，以防止舊的會話被濫用
+						await _customerSessionRepository.InvalidateAllSessions(
 							resetToken.CustomerId,
 							now);
 
-						// 使用戶的所有會話無效，以防止舊的會話被濫用
-						await _customerSessionRepository.InvalidateAllSessions(
+						// 撤銷用戶的所有刷新令牌，以防止舊的刷新令牌被濫用
+						await _refreshTokenRepository.RevokeAllRefreshTokens(
 							resetToken.CustomerId,
 							now);
 
@@ -512,7 +512,8 @@ namespace ServerProject.Services
 						// 更新用戶認證信息中的雙重認證狀態為啟用，並清除待確認過期時間，以完成雙重認證的啟用操作
 						var updatedRows = await _customerAuthRepository.ConfirmEnableTwoFactor(
 							request.CustomerId,
-							now);
+	                        auth.TwoFactorSecret!,
+	                        now);
 
 						// 如果更新用戶認證信息的操作未成功（返回的受影響行數不等於1），則拋出異常
 						if (updatedRows != 1)
@@ -765,13 +766,19 @@ namespace ServerProject.Services
 								{
 									_customerSessionRepository.DataAccess = dataAccess;
 
-									// 创建新的会话，设置会话的绝对过期时间为当前时间加上配置的绝对生命周期
+									var idleExpiresAt = now.Add(_sessionOption.IdleTimeout);
+									var absoluteExpiresAt = now.Add(_sessionOption.AbsoluteLifetime);
+									var expiresAt = idleExpiresAt <= absoluteExpiresAt
+										? idleExpiresAt
+										: absoluteExpiresAt;
+
+									// 创建新的会话
 									var sessionId = await _customerSessionRepository.CreateSession(
 										auth.CustomerId,
-										loginRequest.Device,
-										loginRequest.Ip,
-										now,
-										now.Add(_sessionOption.AbsoluteLifetime));
+	                                    loginRequest.Device,
+	                                    loginRequest.Ip,
+	                                    now,
+	                                    expiresAt);
 
 									// 如果创建会话失败（返回的会话ID为null或空），则抛出异常
 									if (sessionId == null || sessionId == Guid.Empty)
@@ -866,56 +873,29 @@ namespace ServerProject.Services
 					},
 					"GetAuthByCustomerId");
 
-				// 如果找不到對應的用戶認證信息，則返回用戶未找到的錯誤DTO
-				if (auth == null)
+				// 如果找不到對應的用戶認證信息或是用户认证信息已被删除，則返回用戶未找到的錯誤DTO
+				if (auth == null || auth.IsDeleted)
 				{
 					return LogoutResultDto.Fail((int)AuthErrorCode.LogoutUserNotFound,"User not found.");
 				}
 
 				var now = _timeProvider.Now();
 
-				// 在一個事務中執行以下操作：
 				return await ExecuteInTxAsync<LogoutResultDto>(
 					async dataAccess =>
 					{
-						if (auth.AuthType == (short)AuthType.Session)
-						{
-							// 如果用戶使用的是 Session 類型的認證，則使所有會話無效
-							_customerSessionRepository.DataAccess = dataAccess;
+						_customerSessionRepository.DataAccess = dataAccess;
+						_refreshTokenRepository.DataAccess = dataAccess;
 
-							// 使所有用戶會話無效，以防止舊的會話被濫用
-							var affectedRows =
-								await _customerSessionRepository.InvalidateAllSessions(
-									request.CustomerId,
-									now);
+						// 使所有用戶會話無效，以防止舊的會話被濫用
+						await _customerSessionRepository.InvalidateAllSessions(
+							request.CustomerId,
+							now);
 
-							// 如果無法更新會話狀態，則拋出異常
-							if (affectedRows <= 0)
-							{
-								throw new AuthOperationException(
-									AuthErrorCode.ValidationFailed,
-									"Failed to invalidate sessions.");
-							}
-						}
-						else
-						{
-							// 如果用戶使用的是 JWT 類型的認證，則撤銷所有刷新令牌
-							_refreshTokenRepository.DataAccess = dataAccess;
-
-							// 撤銷用戶的所有刷新令牌，以防止舊的刷新令牌被濫用
-							var affectedRows =
-								await _refreshTokenRepository.RevokeAllRefreshTokens(
-									request.CustomerId,
-									now);
-
-							// 如果無法撤銷刷新令牌，則拋出異常
-							if (affectedRows <= 0)
-							{
-								throw new AuthOperationException(
-									AuthErrorCode.ValidationFailed,
-									"Failed to revoke refresh tokens.");
-							}
-						}
+						// 撤銷用戶的所有刷新令牌，以防止舊的刷新令牌被濫用
+						await _refreshTokenRepository.RevokeAllRefreshTokens(
+							request.CustomerId,
+							now);
 
 						// 如果所有操作成功，則返回成功的登出結果DTO
 						return LogoutResultDto.SuccessDto();
@@ -1381,7 +1361,6 @@ namespace ServerProject.Services
 
 			// 計算新的過期時間，將當前時間加上配置的閒置超時值
 			var now = _timeProvider.Now();
-			var newExpiredAt = now.Add(_sessionOption.IdleTimeout);
 
 			try
 			{
@@ -1394,8 +1373,9 @@ namespace ServerProject.Services
 						// 更新會話的最後活動時間和過期時間
 						var affectedRows = await _customerSessionRepository.Touch(
 							request.SessionId,
-							now,
-							newExpiredAt);
+	                        now,
+	                        _sessionOption.IdleTimeout,
+	                        _sessionOption.AbsoluteLifetime);
 
 						// 驗證更新操作是否成功，如果不成功，則拋出異常
 						if (affectedRows != 1)

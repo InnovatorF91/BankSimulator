@@ -248,17 +248,22 @@ namespace ServerProject.Repositories
 		/// </summary>
 		/// <param name="sessionId">會話ID</param>
 		/// <param name="now">當前時間</param>
-		/// <param name="newExpiredAt">新的過期時間</param>
-		/// <returns>更新結果數量</returns>
-		public async Task<int> Touch(Guid sessionId, DateTime now, DateTime newExpiredAt)
+		/// <param name="idleTimeout">待机时间</param>
+		/// <param name="absoluteLifetime">绝对生存时间</param>
+		public async Task<int> Touch(Guid sessionId,DateTime now,TimeSpan idleTimeout,TimeSpan absoluteLifetime)
 		{
 			var sql = LoadSql("CustomerAuth.TouchSession");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
-			{
-				SessionId = sessionId,
-				Now = now,
-				NewExpiredAt = newExpiredAt
-			}, _dataAccess.DbTransaction);
+
+			return await _dataAccess.DbConnection.ExecuteAsync(
+				sql,
+				new
+				{
+					SessionId = sessionId,
+					Now = now,
+					IdleTimeout = idleTimeout,
+					AbsoluteLifetime = absoluteLifetime
+				},
+				_dataAccess.DbTransaction);
 		}
 
 		/// <summary>
@@ -329,16 +334,22 @@ namespace ServerProject.Repositories
 		/// 確認啟用雙重認證
 		/// </summary>
 		/// <param name="userId">登入ID</param>
+		/// <param name="expectedSecret">预期秘密</param>
 		/// <param name="now">當前時間</param>
 		/// <returns>任務結果，包含受影響的行數</returns>
-		public async Task<int> ConfirmEnableTwoFactor(int userId, DateTime now)
+		public async Task<int> ConfirmEnableTwoFactor(int userId, string expectedSecret, DateTime now)
 		{
 			var sql = LoadSql("CustomerAuth.ConfirmEnableTwoFactor");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
-			{
-				UserId = userId,
-				Now = now
-			}, _dataAccess.DbTransaction);
+
+			return await _dataAccess.DbConnection.ExecuteAsync(
+				sql,
+				new
+				{
+					UserId = userId,
+					ExpectedSecret = expectedSecret,
+					Now = now
+				},
+				_dataAccess.DbTransaction);
 		}
 
 		/// <summary>
@@ -567,9 +578,10 @@ namespace ServerProject.Repositories
 		/// 確認啟用雙重認證
 		/// </summary>
 		/// <param name="userId">登入ID</param>
+		/// <param name="expectedSecret">预期秘密</param>
 		/// <param name="now">當前時間</param>
 		/// <returns>任務結果，包含受影響的行數</returns>
-		Task<int> ConfirmEnableTwoFactor(int userId, DateTime now);
+		Task<int> ConfirmEnableTwoFactor(int userId, string expectedSecret, DateTime now);
 
 		/// <summary>
 		/// 更新密碼哈希值並提升令牌版本
@@ -631,9 +643,10 @@ namespace ServerProject.Repositories
 		/// </summary>
 		/// <param name="sessionId">會話ID</param>
 		/// <param name="now">當前時間</param>
-		/// <param name="newExpiredAt">新的過期時間</param>
+		/// <param name="idleTimeout">待机时间</param>
+		/// <param name="absoluteLifetime">绝对生存时间</param>
 		/// <returns>更新結果數量</returns>
-		Task<int> Touch(Guid sessionId, DateTime now, DateTime newExpiredAt);
+		Task<int> Touch(Guid sessionId,DateTime now,TimeSpan idleTimeout,TimeSpan absoluteLifetime);
 
 		/// <summary>
 		/// 根據會話ID獲取會話信息

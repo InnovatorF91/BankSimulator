@@ -453,35 +453,46 @@ namespace ServerProject.Controllers
 		}
 
 		/// <summary>
-		/// 请求向账户登记邮箱发送密码重置邮件。
+		/// 受理向账户登记邮箱发送密码重置邮件的请求。
 		/// </summary>
 		[AllowAnonymous]
 		[HttpPost("ResetPassword")]
-		public async Task<ActionResult<ResetPasswordResponse>> ResetPassword([FromBody] ResetPasswordRequest request)
+		public ActionResult<ResetPasswordResponse> ResetPassword([FromBody] ResetPasswordRequest request,[FromServices] PasswordResetQueue queue)
 		{
-			var result = await _authService.ResetPassword(new ResetPasswordRequest
-			{
-				LoginId = request.LoginId,
-				Ip = HttpContext.Connection.RemoteIpAddress?.ToString(),
-				Device = Request.Headers["User-Agent"].FirstOrDefault()
-			});
-
-			if (!result.Success
-				&& result.Code == (int)AuthErrorCode.ResetPasswordLoginIdRequired)
+			if (string.IsNullOrWhiteSpace(request.LoginId))
 			{
 				return BadRequest(new ErrorResponse
 				{
 					Success = false,
-					Code = result.Code,
+					Code = (int)AuthErrorCode.ResetPasswordLoginIdRequired,
 					Message = "Login ID is required."
 				});
+			}
+
+			var queuedRequest = new ResetPasswordRequest
+			{
+				LoginId = request.LoginId,
+				Ip = HttpContext.Connection.RemoteIpAddress?.ToString(),
+				Device = Request.Headers["User-Agent"].FirstOrDefault()
+			};
+
+			if (!queue.TryEnqueue(queuedRequest))
+			{
+				return StatusCode(
+					StatusCodes.Status503ServiceUnavailable,
+					new ErrorResponse
+					{
+						Success = false,
+						Code = (int)AuthErrorCode.ResetPasswordFailed,
+						Message = "Password reset is temporarily unavailable. Please try again later."
+					});
 			}
 
 			return Ok(new ResetPasswordResponse
 			{
 				Success = true,
 				Code = 0,
-				Message = "If the account exists, a password reset email has been sent."
+				Message = "If the account exists, a password reset email will be sent."
 			});
 		}
 

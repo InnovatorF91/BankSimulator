@@ -98,6 +98,9 @@ namespace ServerProject
 			builder.Services.AddHttpContextAccessor();
 			builder.Services.AddScoped<ICurrentCustomer, CurrentCustomer>();
 
+			builder.Services.AddSingleton<PasswordResetQueue>();
+			builder.Services.AddHostedService<PasswordResetWorker>();
+
 			var app = builder.Build();
 
 			// 生產環境錯誤頁與 HSTS

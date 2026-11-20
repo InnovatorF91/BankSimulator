@@ -1,4 +1,5 @@
-﻿using ServerProject.Common;
+﻿using Microsoft.AspNetCore.Builder;
+using ServerProject.Common;
 using ServerProject.Entities;
 using ServerProject.Repositories;
 
@@ -20,6 +21,11 @@ namespace ServerProject.Services
 		private readonly ICustomerSessionRepository _customerSessionRepository;
 
 		/// <summary>
+		/// 會話選項接口
+		/// </summary>
+		private readonly ISessionOption _sessionOption;
+
+		/// <summary>
 		/// 时间提供者
 		/// </summary>
 		private readonly ITimeProvider _timeProvider;
@@ -34,10 +40,12 @@ namespace ServerProject.Services
 			IConnectionFactory connectionFactory,
 			ICustomerSessionRepository customerSessionRepository,
 			ICustomerAuthRepository customerAuthRepository,
+			ISessionOption sessionOption,
 			ITimeProvider timeProvider) : base(connectionFactory)
 		{
 			_customerSessionRepository = customerSessionRepository;
 			_customerAuthRepository = customerAuthRepository;
+			_sessionOption = sessionOption;
 			_timeProvider = timeProvider;
 		}
 
@@ -66,7 +74,9 @@ namespace ServerProject.Services
 			var now = _timeProvider.Now();
 
 			// 会话已过期。
-			if (session.ExpiredAt <= now)
+			if (session.ExpiredAt <= now 
+				|| session.LastSeenAt.Add(_sessionOption.IdleTimeout) <= now
+	            || session.CreatedAt.Add(_sessionOption.AbsoluteLifetime) <= now)
 			{
 				return null;
 			}
