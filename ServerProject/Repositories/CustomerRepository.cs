@@ -2,6 +2,7 @@
 using ServerProject.Common;
 using ServerProject.Entities;
 using ShareProject.Common;
+using System.Diagnostics;
 
 namespace ServerProject.Repositories
 {
@@ -10,8 +11,14 @@ namespace ServerProject.Repositories
     /// </summary>
     public class CustomerRepository : RepositoryBase, ICustomerRepository
     {
-		public CustomerRepository(IDataAccess dataAccess) : base(dataAccess)
+		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<CustomerRepository> _logger;
+
+		public CustomerRepository(IDataAccess dataAccess, ILogger<CustomerRepository> logger) : base(dataAccess)
 		{
+			_logger = logger;
 		}
 
         /// <summary>
@@ -21,10 +28,23 @@ namespace ServerProject.Repositories
         /// <returns>客戶信息</returns>
         public async Task<CustomerEntity?> GetCustomerById(int id)
         {
-            var sql = LoadSql("Customer.GetCustomerById");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerEntity>(sql, new { CustomerId = id }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
 
+			try
+			{
+				var sql = LoadSql("Customer.GetCustomerById");
+				var customer = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerEntity>(sql, new { CustomerId = id }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return customer;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -34,9 +54,23 @@ namespace ServerProject.Repositories
         /// <returns>客戶ID</returns>
         public async Task<int> InsertCustomer(CustomerEntity customer)
         {
-            var sql = LoadSql("Customer.InsertCustomer");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.ExecuteScalarAsync<int>(sql, customer, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.InsertCustomer");
+				var customerId = await _dataAccess.DbConnection.ExecuteScalarAsync<int>(sql, customer, _dataAccess.DbTransaction);
+
+				outcome = customerId > 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return customerId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -46,9 +80,23 @@ namespace ServerProject.Repositories
         /// <returns>客戶信息</returns>
         public async Task<CustomerEntity?> GetCustomerByPhone(string phone)
         {
-            var sql = LoadSql("Customer.GetCustomerByPhone");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerEntity>(sql, new { Phone = phone }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.GetCustomerByPhone");
+				var customer = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerEntity>(sql, new { Phone = phone }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return customer;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -58,9 +106,23 @@ namespace ServerProject.Repositories
         /// <returns>客戶信息</returns>
         public async Task<CustomerEntity?> GetCustomerByEmail(string email)
         {
-            var sql = LoadSql("Customer.GetCustomerByEmail");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerEntity>(sql, new { Email = email }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.GetCustomerByEmail");
+				var customer = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerEntity>(sql, new { Email = email }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return customer;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -69,12 +131,26 @@ namespace ServerProject.Repositories
 		/// <param name="customerId">客戶ID</param>
 		/// <param name="status">客戶KYC狀態</param>
 		/// <param name="updateAt">更新時間</param>
-		/// <returns>true:更新成功/false:更新失敗</returns>
+		/// <returns>受影响的行数。</returns>
 		public async Task<int> UpdateCustomerKycStatus(int customerId, KYCStatus status, DateTime updateAt)
 		{
-            var sql = LoadSql("Customer.UpdateCustomerKyc");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, KYCStatus = status, UpdateAt = updateAt }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.UpdateCustomerKyc");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, KYCStatus = status, UpdateAt = updateAt }, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -86,11 +162,25 @@ namespace ServerProject.Repositories
 		/// <param name="birthDate">出生日期</param>
 		/// <param name="updatedAt">更新時間</param>
 		/// <returns>更新結果數量</returns>
-		public Task<int> UpdateBasicProfile(int customerId, string name, short? gender, DateOnly birthDate, DateTime updatedAt)
+		public async Task<int> UpdateBasicProfile(int customerId, string name, short? gender, DateOnly birthDate, DateTime updatedAt)
 		{
-			var sql = LoadSql("Customer.UpdateBasicProfile");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, Name = name, Gender = gender, BirthDate = birthDate, UpdateAt = updatedAt}, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.UpdateBasicProfile");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, Name = name, Gender = gender, BirthDate = birthDate, UpdateAt = updatedAt }, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -101,11 +191,25 @@ namespace ServerProject.Repositories
 		/// <param name="idNumber">身份證號碼</param>
 		/// <param name="updatedAt">更新時間</param>
 		/// <returns>更新結果數量</returns>
-		public Task<int> UpdateIdentityDocument(int customerId, short? idType, string idNumber, DateTime updatedAt)
+		public async Task<int> UpdateIdentityDocument(int customerId, short? idType, string idNumber, DateTime updatedAt)
 		{
-			var sql = LoadSql("Customer.UpdateIdentityDocument");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, IdType = idType, IdNumber = idNumber, UpdateAt = updatedAt }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.UpdateIdentityDocument");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, IdType = idType, IdNumber = idNumber, UpdateAt = updatedAt }, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -117,11 +221,25 @@ namespace ServerProject.Repositories
 		/// <param name="email">電子郵件</param>
 		/// <param name="updatedAt">更新時間</param>
 		/// <returns>更新結果數量</returns>
-		public Task<int> UpdateContactInfo(int customerId, string? address, string? phone, string? email, DateTime updatedAt)
+		public async Task<int> UpdateContactInfo(int customerId, string? address, string? phone, string? email, DateTime updatedAt)
 		{
-			var sql = LoadSql("Customer.UpdateContactInfo");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, Address = address, Phone = phone, Email = email, UpdateAt = updatedAt }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.UpdateContactInfo");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, Address = address, Phone = phone, Email = email, UpdateAt = updatedAt }, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -132,11 +250,25 @@ namespace ServerProject.Repositories
 		/// <param name="deletedReason">刪除原因</param>
 		/// <param name="deletedAt">刪除時間</param>
 		/// <returns>刪除結果數量</returns>
-		public Task<int> RemoveCustomer(int customerId, bool isDeleted, string? deletedReason, DateTime deletedAt)
+		public async Task<int> RemoveCustomer(int customerId, bool isDeleted, string? deletedReason, DateTime deletedAt)
 		{
-			var sql = LoadSql("Customer.RemoveCustomer");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, IsDeleted = isDeleted, DeletedReason = deletedReason, DeletedAt = deletedAt }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.RemoveCustomer");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new { CustomerId = customerId, IsDeleted = isDeleted, DeletedReason = deletedReason, DeletedAt = deletedAt }, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -146,13 +278,27 @@ namespace ServerProject.Repositories
 		/// <returns>客戶信息</returns>
 		public async Task<CustomerEntity?> GetCustomerByIdForUpdate(int id)
 		{
-			var sql = LoadSql("Customer.GetCustomerByIdForUpdate");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection
-				.QuerySingleOrDefaultAsync<CustomerEntity>(
-					sql,
-					new { Id = id },
-					_dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Customer.GetCustomerByIdForUpdate");
+				var customer = await _dataAccess.DbConnection
+					.QuerySingleOrDefaultAsync<CustomerEntity>(
+						sql,
+						new { Id = id },
+						_dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return customer;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 	}
 

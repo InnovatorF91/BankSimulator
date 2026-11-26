@@ -4,13 +4,16 @@
 	{
 		private readonly PasswordResetQueue _queue;
 		private readonly IServiceScopeFactory _scopeFactory;
+		private readonly ILogger<PasswordResetWorker> _logger;
 
 		public PasswordResetWorker(
 			PasswordResetQueue queue,
-			IServiceScopeFactory scopeFactory)
+			IServiceScopeFactory scopeFactory,
+			ILogger<PasswordResetWorker> logger)
 		{
 			_queue = queue;
 			_scopeFactory = scopeFactory;
+			_logger = logger;
 		}
 
 		protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -37,7 +40,8 @@
 					catch (Exception)
 					{
 						// 当前任务结束，继续处理队列中的下一条任务。
-						// 统一接入日志时补充后台任务异常记录。
+						_logger.LogError(
+							"A password reset background task failed with an unhandled exception.");
 					}
 				}
 			}

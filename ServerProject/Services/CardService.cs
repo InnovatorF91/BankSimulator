@@ -1,11 +1,10 @@
-﻿using ServerProject.Common;
+﻿using System.Diagnostics;
+using ServerProject.Common;
 using ServerProject.DTOs;
 using ServerProject.Entities;
 using ServerProject.Repositories;
 using ShareProject.Common;
 using ShareProject.Request;
-using System.Net.NetworkInformation;
-using System.Text;
 
 namespace ServerProject.Services
 {
@@ -20,11 +19,6 @@ namespace ServerProject.Services
 		/// 客戶服務實例，用於處理客戶相關的操作
 		/// </summary>
 		private readonly ICustomerRepository _customerRepository;
-
-		/// <summary>
-		/// 交易服務實例，用於處理交易相關的操作
-		/// </summary>
-		private readonly ITransactionRepository _transactionRepository;
 
 		/// <summary>
 		/// 當前客戶實例，用於獲取當前登入的客戶信息
@@ -61,24 +55,26 @@ namespace ServerProject.Services
 		/// </summary>
 		private const int PinLockMinutes = 15;
 
+		private readonly ILogger<CardService> _logger;
+
 		public CardService(IConnectionFactory connectionFactory,
 			IAccountRepository accountRepository,
 			ICustomerRepository customerRepository,
-			ITransactionRepository transactionRepository,
 			ITimeProvider timeProvider,
 			ICurrentCustomer currentCustomer,
 			ICardRepository cardRepository,
 			ICryptoRepository cryptoRepository,
-			ICardNumberGenerator cardNumberGenerator) : base(connectionFactory)
+			ICardNumberGenerator cardNumberGenerator,
+			ILogger<CardService> logger) : base(connectionFactory)
 		{
 			_accountRepository = accountRepository;
 			_customerRepository = customerRepository;
-			_transactionRepository = transactionRepository;
 			_timeProvider = timeProvider;
 			_currentCustomer = currentCustomer;
 			_cardRepository = cardRepository;
 			_cryptoRepository = cryptoRepository;
 			_cardNumberGenerator = cardNumberGenerator;
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -86,7 +82,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">封鎖卡片請求資料傳輸物件</param>
 		/// <returns>封鎖卡片結果資料傳輸物件</returns>
-		public async Task<BlockCardResultDto> BlockCard(BlockCardRequest request)
+		public Task<BlockCardResultDto> BlockCard(BlockCardRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(BlockCard),
+				() => BlockCardCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<BlockCardResultDto> BlockCardCoreAsync(BlockCardRequest request)
 		{
 			//检查 Request 和 CardId。
 			if (request == null || request.CardId <= 0)
@@ -103,6 +107,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(BlockCard), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return BlockCardResultDto.Fail((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -157,13 +163,13 @@ namespace ServerProject.Services
 						// 驗證帳戶是否存在且屬於當前客戶
 						if (account == null || account.CustomerId != customerId)
 						{
-							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
+							return BlockCardResultDto.Fail((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
 						}
 
 						// 验证账户状态是否为关闭，如果是，则返回账户已关闭错误
 						if (account.Status == AccountStatus.Closed)
 						{
-							return BlockCardResultDto.Fail((int)AccountErrorCode.AccountAlreadyClosed,"The account has been closed.");
+							return BlockCardResultDto.Fail((int)AccountErrorCode.AccountAlreadyClosed, "The account has been closed.");
 						}
 
 						// 重新获取卡片信息以进行更新操作
@@ -187,7 +193,7 @@ namespace ServerProject.Services
 						// 验证卡片状态是否已经被封锁，如果是，则直接返回成功结果
 						if (lockedCard.Status == CardStatus.Blocked)
 						{
-							return BlockCardResultDto.SuccessDto(lockedCard.CardId,CardStatus.Blocked);
+							return BlockCardResultDto.SuccessDto(lockedCard.CardId, CardStatus.Blocked);
 						}
 
 						// 验证卡片是否已过期
@@ -215,7 +221,7 @@ namespace ServerProject.Services
 						// 如果更新失败，说明卡片状态已发生变化，返回冲突错误
 						if (affectedRows == 0)
 						{
-							throw new CardOperationException (CardErrorCode.CardStateConflict, "The card status has changed, the update failed.");
+							throw new CardOperationException(CardErrorCode.CardStateConflict, "The card status has changed, the update failed.");
 						}
 
 						// 返回成功结果
@@ -228,11 +234,19 @@ namespace ServerProject.Services
 			}
 			catch (CardOperationException ex)
 			{
+				var errorCode = (int)ex.ErrorCode;
+				var level = GetFailureOutcome(errorCode) == LogOutcome.Failed
+					? LogLevel.Error
+					: LogLevel.Debug;
+				_logger.Log(level, "{Operation} caught a card operation exception. ErrorCode={ErrorCode}",
+					nameof(BlockCard), errorCode);
 				//发生异常则 Rollback
 				return BlockCardResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(BlockCard), (int)CardErrorCode.UnableToOperateDb);
 				//发生异常则 Rollback
 				return BlockCardResultDto.Fail((int)CardErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
@@ -242,7 +256,15 @@ namespace ServerProject.Services
 		/// 獲取當前登入客戶的未关闭账户下的卡片
 		/// </summary>
 		/// <returns>獲取我的卡片結果資料傳輸物件</returns>
-		public async Task<GetMyCardsResultDto> GetMyCards()
+		public Task<GetMyCardsResultDto> GetMyCards()
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(GetMyCards),
+				() => GetMyCardsCoreAsync(),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<GetMyCardsResultDto> GetMyCardsCoreAsync()
 		{
 			// 從當前客戶獲取客戶ID
 			int customerId;
@@ -253,6 +275,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(GetMyCards), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return GetMyCardsResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -329,6 +353,8 @@ namespace ServerProject.Services
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(GetMyCards), (int)CardErrorCode.UnableToOperateDb);
 				// 捕获数据库异常，返回数据库操作错误
 				return GetMyCardsResultDto.Failure((int)CardErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
@@ -339,7 +365,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">發行卡片請求資料傳輸物件</param>
 		/// <returns>發行卡片結果資料傳輸物件</returns>
-		public async Task<IssueCardResultDto> IssueCard(IssueCardRequest request)
+		public Task<IssueCardResultDto> IssueCard(IssueCardRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(IssueCard),
+				() => IssueCardCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<IssueCardResultDto> IssueCardCoreAsync(IssueCardRequest request)
 		{
 			//Request 非空。
 			if (request == null)
@@ -373,6 +407,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(IssueCard), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return IssueCardResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -397,7 +433,7 @@ namespace ServerProject.Services
 				}
 
 				// 计算PIN的哈希值。
-				var pinHash = _cryptoRepository.Hash(request.PIN,HashProfile.CardPIN);
+				var pinHash = _cryptoRepository.Hash(request.PIN, HashProfile.CardPIN);
 
 				// 进入事务，执行发卡操作。
 				var result = await ExecuteInTxAsync<IssueCardResultDto>(
@@ -413,17 +449,17 @@ namespace ServerProject.Services
 						}
 						if (account.Status != AccountStatus.Active)
 						{
-							return IssueCardResultDto.Failure((int)AccountErrorCode.AccountNotAvailable,"The account is not available for card issuance.");
+							return IssueCardResultDto.Failure((int)AccountErrorCode.AccountNotAvailable, "The account is not available for card issuance.");
 						}
 
 						// 取得当前时间
 						var now = _timeProvider.Now();
 
 						// 检查是否存在同类型未过期的 Active／Blocked 卡
-						var count = await _cardRepository.CountUsableCardsByAccountIdAndType(account.AccountId,request.CardType,(short)now.Year,(short)now.Month);
+						var count = await _cardRepository.CountUsableCardsByAccountIdAndType(account.AccountId, request.CardType, (short)now.Year, (short)now.Month);
 						if (count > 0)
 						{
-							return IssueCardResultDto.Failure((int)CardErrorCode.CardAlreadyExists,"An unexpired card of this type already exists.");
+							return IssueCardResultDto.Failure((int)CardErrorCode.CardAlreadyExists, "An unexpired card of this type already exists.");
 						}
 
 						// 生成卡片过期年月
@@ -460,7 +496,7 @@ namespace ServerProject.Services
 						// 如果返回的卡片ID不大于0，则抛出异常
 						if (cardId <= 0)
 						{
-							throw new CardOperationException(CardErrorCode.CardCreationFailed,"Failed to create the card.");
+							throw new CardOperationException(CardErrorCode.CardCreationFailed, "Failed to create the card.");
 						}
 						card.CardId = cardId;
 
@@ -483,15 +519,25 @@ namespace ServerProject.Services
 			}
 			catch (CardNumberConflictException)
 			{
-				return IssueCardResultDto.Failure((int)CardErrorCode.CardNumberConflict,"The generated card number already exists.");
+				_logger.LogError("{Operation} encountered a generated card number conflict. ErrorCode={ErrorCode}",
+					nameof(IssueCard), (int)CardErrorCode.CardNumberConflict);
+				return IssueCardResultDto.Failure((int)CardErrorCode.CardNumberConflict, "The generated card number already exists.");
 			}
 			catch (CardOperationException ex)
 			{
+				var errorCode = (int)ex.ErrorCode;
+				var level = GetFailureOutcome(errorCode) == LogOutcome.Failed
+					? LogLevel.Error
+					: LogLevel.Debug;
+				_logger.Log(level, "{Operation} caught a card operation exception. ErrorCode={ErrorCode}",
+					nameof(IssueCard), errorCode);
 				//发生异常则 Rollback
 				return IssueCardResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(IssueCard), (int)CardErrorCode.UnableToOperateDb);
 				//发生异常则 Rollback
 				return IssueCardResultDto.Failure((int)CardErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
@@ -502,7 +548,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">修改卡片的请求资料传输物件</param>
 		/// <returns>修改卡片PIN的结果Dto</returns>
-		public async Task<ChangeCardPinResultDto> ChangeCardPin(ChangeCardPinRequest request)
+		public Task<ChangeCardPinResultDto> ChangeCardPin(ChangeCardPinRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(ChangeCardPin),
+				() => ChangeCardPinCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<ChangeCardPinResultDto> ChangeCardPinCoreAsync(ChangeCardPinRequest request)
 		{
 			// Request 非空，`CardId > 0`。
 			if (request == null)
@@ -511,16 +565,16 @@ namespace ServerProject.Services
 			}
 			if (request.CardId <= 0)
 			{
-				return ChangeCardPinResultDto.Failure((int)CardErrorCode.ValidationFailed,"CardId must be greater than 0.");
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.ValidationFailed, "CardId must be greater than 0.");
 			}
 			// CurrentPIN、`NewPIN` 均为四位数字。
 			if (string.IsNullOrWhiteSpace(request.CurrentPIN) || request.CurrentPIN.Length != 4 || !request.CurrentPIN.All(c => c >= '0' && c <= '9'))
 			{
-				return ChangeCardPinResultDto.Failure((int)CardErrorCode.InvalidPIN,"Current PIN must be exactly 4 digits.");
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.InvalidPIN, "Current PIN must be exactly 4 digits.");
 			}
 			if (string.IsNullOrWhiteSpace(request.NewPIN) || request.NewPIN.Length != 4 || !request.NewPIN.All(c => c >= '0' && c <= '9'))
 			{
-				return ChangeCardPinResultDto.Failure((int)CardErrorCode.InvalidPIN,"New PIN must be exactly 4 digits.");
+				return ChangeCardPinResultDto.Failure((int)CardErrorCode.InvalidPIN, "New PIN must be exactly 4 digits.");
 			}
 
 			//获取当前客户 ID。
@@ -531,6 +585,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(ChangeCardPin), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return ChangeCardPinResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -579,7 +635,7 @@ namespace ServerProject.Services
 						var account = await _accountRepository.GetAccountByIdAndCustomerIdForUpdate(card.AccountId, customerId);
 						if (account == null || account.CustomerId != customerId)
 						{
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
 						}
 						if (account.Status != AccountStatus.Active)
 						{
@@ -592,19 +648,19 @@ namespace ServerProject.Services
 						// 卡片不存在，或已不属于刚才锁定的账户。
 						if (lockedCard == null || lockedCard.AccountId != account.AccountId)
 						{
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
 						}
 
 						// 卡片已标记为过期。
 						if (lockedCard.Status == CardStatus.Expired)
 						{
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardExpired,"The card has expired.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardExpired, "The card has expired.");
 						}
 
 						// 只有 Active 卡片允许修改 PIN。
 						if (lockedCard.Status != CardStatus.Active)
 						{
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardStatusInvalid,"The card status does not allow PIN changes.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardStatusInvalid, "The card status does not allow PIN changes.");
 						}
 
 						var now = _timeProvider.Now();
@@ -613,13 +669,13 @@ namespace ServerProject.Services
 						var expired = lockedCard.ExpiryYear < now.Year || (lockedCard.ExpiryYear == now.Year && lockedCard.ExpiryMonth < now.Month);
 						if (expired)
 						{
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardExpired,"The card has expired.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CardExpired, "The card has expired.");
 						}
 
 						// 检查临时锁定
 						if (lockedCard.PINLockedUntil.HasValue && lockedCard.PINLockedUntil.Value > now)
 						{
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.PINLocked,"PIN verification is temporarily locked.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.PINLocked, "PIN verification is temporarily locked.");
 						}
 
 						// 确定本轮已有失败次数。
@@ -628,58 +684,58 @@ namespace ServerProject.Services
 						var failCount = lockedCard.PINLockedUntil.HasValue ? 0 : (int)lockedCard.PINFailCount;
 
 						// 验证旧PIN：第一个参数为哈希，第二个参数为用户输入。
-						var verified = _cryptoRepository.Verify(lockedCard.PINHash,request.CurrentPIN);
+						var verified = _cryptoRepository.Verify(lockedCard.PINHash, request.CurrentPIN);
 
 						// 旧PIN错误，更新失败次数及锁定时间。
 						if (!verified)
 						{
-							var newFailCount = (short)Math.Min(failCount + 1,MaxPinFailures);
+							var newFailCount = (short)Math.Min(failCount + 1, MaxPinFailures);
 
 							DateTime? lockedUntil = newFailCount >= MaxPinFailures ? now.AddMinutes(PinLockMinutes) : null;
 
-							var affectedRows = await _cardRepository.UpdatePINFailCount(lockedCard.CardId,newFailCount,now,lockedUntil);
+							var affectedRows = await _cardRepository.UpdatePINFailCount(lockedCard.CardId, newFailCount, now, lockedUntil);
 
 							// 保存失败则抛出异常，由ServiceBase回滚事务。
 							if (affectedRows != 1)
 							{
-								throw new CardOperationException(CardErrorCode.PINUpdateFailed,"Failed to update PIN verification data.");
+								throw new CardOperationException(CardErrorCode.PINUpdateFailed, "Failed to update PIN verification data.");
 							}
 
 							// 达到失败次数上限，返回锁定错误。
 							if (lockedUntil.HasValue)
 							{
-								return ChangeCardPinResultDto.Failure((int)CardErrorCode.PINLocked,"PIN verification is temporarily locked.");
+								return ChangeCardPinResultDto.Failure((int)CardErrorCode.PINLocked, "PIN verification is temporarily locked.");
 							}
 
 							// 未达到上限，返回旧PIN错误。
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CurrentPINIncorrect,"The current PIN is incorrect.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.CurrentPINIncorrect, "The current PIN is incorrect.");
 						}
 
 						// 旧PIN验证成功，清零失败次数和锁定时间。
-						var resetRows = await _cardRepository.UpdatePINFailCount(lockedCard.CardId,0,now,null);
+						var resetRows = await _cardRepository.UpdatePINFailCount(lockedCard.CardId, 0, now, null);
 
 						if (resetRows != 1)
 						{
-							throw new CardOperationException(CardErrorCode.PINUpdateFailed,"Failed to reset PIN verification data.");
+							throw new CardOperationException(CardErrorCode.PINUpdateFailed, "Failed to reset PIN verification data.");
 						}
 
 						// 新旧PIN相同，不修改PIN。
 						// 正常返回，让事务提交前面的失败次数重置。
 						if (request.CurrentPIN == request.NewPIN)
 						{
-							return ChangeCardPinResultDto.Failure((int)CardErrorCode.NewPINUnchanged,"The new PIN must differ from the current PIN.");
+							return ChangeCardPinResultDto.Failure((int)CardErrorCode.NewPINUnchanged, "The new PIN must differ from the current PIN.");
 						}
 
 						// 生成新PIN的哈希。
-						var newHash = _cryptoRepository.Hash(request.NewPIN,HashProfile.CardPIN);
+						var newHash = _cryptoRepository.Hash(request.NewPIN, HashProfile.CardPIN);
 
 						// 更新PIN哈希。
-						var updatedRows = await _cardRepository.UpdateCardPIN(lockedCard.CardId,newHash,now);
+						var updatedRows = await _cardRepository.UpdateCardPIN(lockedCard.CardId, newHash, now);
 
 						if (updatedRows != 1)
 						{
 							// 抛出异常，PIN更新与前面的失败次数重置一起回滚。
-							throw new CardOperationException(CardErrorCode.PINUpdateFailed,"Failed to update the card PIN.");
+							throw new CardOperationException(CardErrorCode.PINUpdateFailed, "Failed to update the card PIN.");
 						}
 
 						// 返回成功，由ExecuteInTxAsync提交事务。
@@ -690,11 +746,19 @@ namespace ServerProject.Services
 			}
 			catch (CardOperationException ex)
 			{
+				var errorCode = (int)ex.ErrorCode;
+				var level = GetFailureOutcome(errorCode) == LogOutcome.Failed
+					? LogLevel.Error
+					: LogLevel.Debug;
+				_logger.Log(level, "{Operation} caught a card operation exception. ErrorCode={ErrorCode}",
+					nameof(ChangeCardPin), errorCode);
 				//发生异常则 Rollback
 				return ChangeCardPinResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(ChangeCardPin), (int)CardErrorCode.UnableToOperateDb);
 				//发生异常则 Rollback
 				return ChangeCardPinResultDto.Failure((int)CardErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
@@ -720,7 +784,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">卡片替換請求</param>
 		/// <returns>卡片替換結果 DTO</returns>
-		public async Task<ReplaceCardResultDto> ReplaceCard(ReplaceCardRequest request)
+		public Task<ReplaceCardResultDto> ReplaceCard(ReplaceCardRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(ReplaceCard),
+				() => ReplaceCardCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<ReplaceCardResultDto> ReplaceCardCoreAsync(ReplaceCardRequest request)
 		{
 			// Request 非空。
 			if (request == null)
@@ -754,6 +826,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(ReplaceCard), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return ReplaceCardResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -793,152 +867,214 @@ namespace ServerProject.Services
 				}
 
 				// 计算PIN的哈希值。
-				var pinHash = _cryptoRepository.Hash(request.PIN,HashProfile.CardPIN);
+				var pinHash = _cryptoRepository.Hash(request.PIN, HashProfile.CardPIN);
 
 				// 进入事务，执行卡片替换操作。
 				return await ExecuteInTxAsync<ReplaceCardResultDto>(
 					async dataAccess =>
-				{
-					_accountRepository.DataAccess = dataAccess;
-					_cardRepository.DataAccess = dataAccess;
-
-					// 确认账户存在、属于当前客户、未关闭。
-					var account = await _accountRepository.GetAccountByIdAndCustomerIdForUpdate(card.AccountId, customerId);
-
-					// 账户不存在或不属于客户：返回统一的卡片不存在／访问拒绝错误。
-					if (account == null || account.CustomerId != customerId)
 					{
-						return ReplaceCardResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
-					}
+						_accountRepository.DataAccess = dataAccess;
+						_cardRepository.DataAccess = dataAccess;
 
-					// 账户非 Active：返回 AccountNotAvailable。
-					if (account.Status != AccountStatus.Active)
-					{
-						return ReplaceCardResultDto.Failure((int)AccountErrorCode.AccountNotAvailable,"The account is not available for card replacement.");
-					}
+						// 确认账户存在、属于当前客户、未关闭。
+						var account = await _accountRepository.GetAccountByIdAndCustomerIdForUpdate(card.AccountId, customerId);
 
-					// 重新读取并锁定卡片。
-					var lockedCard = await _cardRepository.GetCardByIdForUpdate(request.CardId);
+						// 账户不存在或不属于客户：返回统一的卡片不存在／访问拒绝错误。
+						if (account == null || account.CustomerId != customerId)
+						{
+							return ReplaceCardResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
+						}
 
-					// lockedCard如果不存在，或者 AccountId 与锁定账户不一致
-					if (lockedCard == null || lockedCard.AccountId != account.AccountId)
-					{
-						return ReplaceCardResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied,"The card does not exist or access is denied.");
-					}
+						// 账户非 Active：返回 AccountNotAvailable。
+						if (account.Status != AccountStatus.Active)
+						{
+							return ReplaceCardResultDto.Failure((int)AccountErrorCode.AccountNotAvailable, "The account is not available for card replacement.");
+						}
 
-					// ReplacedBy 不为空，说明卡片已被替换，返回 CardAlreadyReplaced。
-					if (lockedCard.ReplacedBy.HasValue)
-					{
-						return ReplaceCardResultDto.Failure((int)CardErrorCode.CardAlreadyReplaced,"The card has already been replaced.");
-					}
+						// 重新读取并锁定卡片。
+						var lockedCard = await _cardRepository.GetCardByIdForUpdate(request.CardId);
 
-					// DeactivatedAt 不为空，说明卡片已被停用，返回 CardAlreadyDeactivated。
-					if (lockedCard.DeactivatedAt.HasValue)
-					{
-						return ReplaceCardResultDto.Failure((int)CardErrorCode.CardAlreadyDeactivated,"The card has already been deactivated.");
-					}
+						// lockedCard如果不存在，或者 AccountId 与锁定账户不一致
+						if (lockedCard == null || lockedCard.AccountId != account.AccountId)
+						{
+							return ReplaceCardResultDto.Failure((int)CardErrorCode.CardNotFoundOrAccessDenied, "The card does not exist or access is denied.");
+						}
 
-					// 卡片状态不是 Active 或 Blocked 或Expired，返回 CardStatusInvalid。
-					if (lockedCard.Status != CardStatus.Active && lockedCard.Status != CardStatus.Blocked && lockedCard.Status != CardStatus.Expired)
-					{
-						return ReplaceCardResultDto.Failure((int)CardErrorCode.CardStatusInvalid,"The card status does not allow replacement.");
-					}
+						// ReplacedBy 不为空，说明卡片已被替换，返回 CardAlreadyReplaced。
+						if (lockedCard.ReplacedBy.HasValue)
+						{
+							return ReplaceCardResultDto.Failure((int)CardErrorCode.CardAlreadyReplaced, "The card has already been replaced.");
+						}
 
-					// 生成新卡片的过期年月
-					var now = _timeProvider.Now();
-					var expiry = now.AddYears(3);
+						// DeactivatedAt 不为空，说明卡片已被停用，返回 CardAlreadyDeactivated。
+						if (lockedCard.DeactivatedAt.HasValue)
+						{
+							return ReplaceCardResultDto.Failure((int)CardErrorCode.CardAlreadyDeactivated, "The card has already been deactivated.");
+						}
 
-					// 生成新卡号
-					var newCardNumber = _cardNumberGenerator.Generate();
+						// 卡片状态不是 Active 或 Blocked 或Expired，返回 CardStatusInvalid。
+						if (lockedCard.Status != CardStatus.Active && lockedCard.Status != CardStatus.Blocked && lockedCard.Status != CardStatus.Expired)
+						{
+							return ReplaceCardResultDto.Failure((int)CardErrorCode.CardStatusInvalid, "The card status does not allow replacement.");
+						}
 
-					// 构造新卡片实体
-					var newCard = new CardEntity
-					{
-						AccountId = account.AccountId,
-						CardNumber = newCardNumber,
-						ExpiryYear = (short)expiry.Year,
-						ExpiryMonth = (short)expiry.Month,
-						PINHash = pinHash,
-						PINFailCount = 0,
-						PINLockedUntil = null,
-						CardType = lockedCard.CardType,
-						Status = CardStatus.Active,
-						DeactivatedAt = null,
-						ReplacedBy = null,
-						CreatedAt = now,
-						UpdatedAt = now
-					};
+						// 生成新卡片的过期年月
+						var now = _timeProvider.Now();
+						var expiry = now.AddYears(3);
 
-					// 插入新卡片
-					var newCardId = await _cardRepository.InsertNewCard(newCard);
+						// 生成新卡号
+						var newCardNumber = _cardNumberGenerator.Generate();
 
-					// 如果返回的卡片ID不大于0，则抛出异常
-					if (newCardId <= 0)
-					{
-						throw new CardOperationException(CardErrorCode.CardCreationFailed,"Failed to create the new card.");
-					}
+						// 构造新卡片实体
+						var newCard = new CardEntity
+						{
+							AccountId = account.AccountId,
+							CardNumber = newCardNumber,
+							ExpiryYear = (short)expiry.Year,
+							ExpiryMonth = (short)expiry.Month,
+							PINHash = pinHash,
+							PINFailCount = 0,
+							PINLockedUntil = null,
+							CardType = lockedCard.CardType,
+							Status = CardStatus.Active,
+							DeactivatedAt = null,
+							ReplacedBy = null,
+							CreatedAt = now,
+							UpdatedAt = now
+						};
 
-					newCard.CardId = newCardId;
+						// 插入新卡片
+						var newCardId = await _cardRepository.InsertNewCard(newCard);
 
-					// 更新旧卡片的 ReplacedBy 和 DeactivatedAt
-					var affectedRows = await _cardRepository.DeactivateCardForReplacement(lockedCard.CardId, lockedCard.Status,newCardId,now);
+						// 如果返回的卡片ID不大于0，则抛出异常
+						if (newCardId <= 0)
+						{
+							throw new CardOperationException(CardErrorCode.CardCreationFailed, "Failed to create the new card.");
+						}
 
-					// 如果更新失败，说明卡片状态已发生变化，返回冲突错误
-					if (affectedRows != 1)
-					{
-						throw new CardOperationException(CardErrorCode.CardStateConflict,"The card status has changed, the update failed.");
-					}
+						newCard.CardId = newCardId;
 
-					// 检查新卡片是否已存在同类型未过期的 Active／Blocked 卡
-					var count = await _cardRepository.CountUsableCardsByAccountIdAndType(account.AccountId,newCard.CardType,(short)now.Year,(short)now.Month);
+						// 更新旧卡片的 ReplacedBy 和 DeactivatedAt
+						var affectedRows = await _cardRepository.DeactivateCardForReplacement(lockedCard.CardId, lockedCard.Status, newCardId, now);
 
-					// 如果 count 大于 1，说明已经存在同类型未过期的卡片，抛出异常
-					if (count > 1)
-					{
-						throw new CardOperationException(CardErrorCode.CardAlreadyExists,"An unexpired card of this type already exists.");
-					}
+						// 如果更新失败，说明卡片状态已发生变化，返回冲突错误
+						if (affectedRows != 1)
+						{
+							throw new CardOperationException(CardErrorCode.CardStateConflict, "The card status has changed, the update failed.");
+						}
 
-					// 如果 count 不等于 1，说明替换结果不一致，抛出异常
-					if (count != 1)
-					{
-						throw new CardOperationException(CardErrorCode.CardStateConflict,"The card replacement result is inconsistent.");
-					}
+						// 检查新卡片是否已存在同类型未过期的 Active／Blocked 卡
+						var count = await _cardRepository.CountUsableCardsByAccountIdAndType(account.AccountId, newCard.CardType, (short)now.Year, (short)now.Month);
 
-					// 将新卡片实体转换为DTO
-					var newCardDto = new CardDto
-					{
-						CardId = newCard.CardId,
-						AccountId = newCard.AccountId,
-						MaskedCardNumber = MaskCardNumber(newCard.CardNumber),
-						ExpiryYear = newCard.ExpiryYear,
-						ExpiryMonth = newCard.ExpiryMonth,
-						CardType = newCard.CardType,
-						Status = newCard.Status
-					};
+						// 如果 count 大于 1，说明已经存在同类型未过期的卡片，抛出异常
+						if (count > 1)
+						{
+							throw new CardOperationException(CardErrorCode.CardAlreadyExists, "An unexpired card of this type already exists.");
+						}
 
-					// 返回成功结果
-					return ReplaceCardResultDto.SuccessDto(lockedCard.CardId,newCardDto);
-				});
+						// 如果 count 不等于 1，说明替换结果不一致，抛出异常
+						if (count != 1)
+						{
+							throw new CardOperationException(CardErrorCode.CardStateConflict, "The card replacement result is inconsistent.");
+						}
+
+						// 将新卡片实体转换为DTO
+						var newCardDto = new CardDto
+						{
+							CardId = newCard.CardId,
+							AccountId = newCard.AccountId,
+							MaskedCardNumber = MaskCardNumber(newCard.CardNumber),
+							ExpiryYear = newCard.ExpiryYear,
+							ExpiryMonth = newCard.ExpiryMonth,
+							CardType = newCard.CardType,
+							Status = newCard.Status
+						};
+
+						// 返回成功结果
+						return ReplaceCardResultDto.SuccessDto(lockedCard.CardId, newCardDto);
+					});
 			}
 			catch (CardNumberConflictException)
 			{
+				_logger.LogError("{Operation} encountered a generated card number conflict. ErrorCode={ErrorCode}",
+					nameof(ReplaceCard), (int)CardErrorCode.CardNumberConflict);
 				return ReplaceCardResultDto.Failure(
 					(int)CardErrorCode.CardNumberConflict,
 					"The generated card number already exists.");
 			}
 			catch (CardOperationException ex)
 			{
+				var errorCode = (int)ex.ErrorCode;
+				var level = GetFailureOutcome(errorCode) == LogOutcome.Failed
+					? LogLevel.Error
+					: LogLevel.Debug;
+				_logger.Log(level, "{Operation} caught a card operation exception. ErrorCode={ErrorCode}",
+					nameof(ReplaceCard), errorCode);
 				return ReplaceCardResultDto.Failure(
 					(int)ex.ErrorCode,
 					ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(ReplaceCard), (int)CardErrorCode.UnableToOperateDb);
 				return ReplaceCardResultDto.Failure(
 					(int)CardErrorCode.UnableToOperateDb,
 					"A database error occurred during the operation.");
 			}
 		}
+		/// <summary>
+		/// 区分发卡、PIN 写入和数据库故障与业务拒绝。
+		/// </summary>
+		private static LogOutcome GetFailureOutcome(int errorCode)
+		{
+			return errorCode switch
+			{
+				(int)CardErrorCode.UnableToOperateDb
+					or (int)CardErrorCode.CardNumberConflict
+					or (int)CardErrorCode.CardCreationFailed
+					or (int)CardErrorCode.PINUpdateFailed => LogOutcome.Failed,
+				_ => LogOutcome.Rejected
+			};
+		}
+
+		/// <summary>
+		/// 执行卡片操作并记录开始、结束、耗时和结果。
+		/// </summary>
+		private async Task<TResult> ExecuteWithLoggingAsync<TResult>(
+			string operation,
+			Func<Task<TResult>> execute,
+			Func<TResult, (bool Success, int Code)> getResult)
+		{
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+			int? errorCode = null;
+
+			_logger.LogStart(operation: operation);
+
+			try
+			{
+				var result = await execute();
+				var (success, code) = getResult(result);
+
+				if (success)
+				{
+					outcome = LogOutcome.Completed;
+				}
+				else
+				{
+					errorCode = code;
+					outcome = GetFailureOutcome(code);
+				}
+
+				return result;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode, operation: operation);
+			}
+		}
+
 	}
 
 	public interface ICardService

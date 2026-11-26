@@ -1,4 +1,5 @@
-﻿using ServerProject.Common;
+﻿using System.Diagnostics;
+using ServerProject.Common;
 using ServerProject.DTOs;
 using ServerProject.Entities;
 using ServerProject.Repositories;
@@ -11,21 +12,21 @@ namespace ServerProject.Services
 	/// 賬戶邏輯類別，實現帳戶相關的業務邏輯
 	/// </summary>
 	public class AccountService : ServiceBase, IAccountService
-    {
-        /// <summary>
-        /// 帳戶服務實例，用於處理帳戶相關的數據操作
-        /// </summary>
-        private readonly IAccountRepository _accountRepository;
+	{
+		/// <summary>
+		/// 帳戶服務實例，用於處理帳戶相關的數據操作
+		/// </summary>
+		private readonly IAccountRepository _accountRepository;
 
-        /// <summary>
-        /// 客戶服務實例，用於處理客戶相關的操作
-        /// </summary>
-        private readonly ICustomerRepository _customerRepository;
+		/// <summary>
+		/// 客戶服務實例，用於處理客戶相關的操作
+		/// </summary>
+		private readonly ICustomerRepository _customerRepository;
 
-        /// <summary>
-        /// 交易服務實例，用於處理交易相關的操作
-        /// </summary>
-        private readonly ITransactionRepository _transactionRepository;
+		/// <summary>
+		/// 交易服務實例，用於處理交易相關的操作
+		/// </summary>
+		private readonly ITransactionRepository _transactionRepository;
 
 		/// <summary>
 		/// 卡片服務實例，用於處理卡片相關的操作
@@ -42,6 +43,8 @@ namespace ServerProject.Services
 		/// </summary>
 		private readonly ITimeProvider _timeProvider;
 
+		private readonly ILogger<AccountService> _logger;
+
 		/// <summary>
 		/// 建構函數，初始化帳戶邏輯類別的實例
 		/// </summary>
@@ -51,21 +54,24 @@ namespace ServerProject.Services
 		/// <param name="transactionRepository">交易服務實例</param>
 		/// <param name="currentCustomer">当前登录客户信息</param>
 		/// <param name="timeProvider">時間提供者實例</param>
+		/// <param name="logger">用于记录账户服务的运行日志。</param>
 		public AccountService(
-			IConnectionFactory connectionFactory, 
-			IAccountRepository accountRepository, 
+			IConnectionFactory connectionFactory,
+			IAccountRepository accountRepository,
 			ICustomerRepository customerRepository,
-			ITransactionRepository transactionRepository ,
+			ITransactionRepository transactionRepository,
 			ITimeProvider timeProvider,
 			ICurrentCustomer currentCustomer,
-			ICardRepository cardRepository) : base(connectionFactory)
-        {
-            _accountRepository = accountRepository;
-            _customerRepository = customerRepository;
-            _transactionRepository = transactionRepository;
-            _timeProvider = timeProvider;
+			ICardRepository cardRepository,
+			ILogger<AccountService> logger) : base(connectionFactory)
+		{
+			_accountRepository = accountRepository;
+			_customerRepository = customerRepository;
+			_transactionRepository = transactionRepository;
+			_timeProvider = timeProvider;
 			_currentCustomer = currentCustomer;
 			_cardRepository = cardRepository;
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -74,18 +80,26 @@ namespace ServerProject.Services
 		/// <param name="request">關閉我的帳戶請求參數</param>
 		/// <returns>返回關閉我的帳戶結果</returns>
 
-		public async Task<CloseMyAccountResultDto> CloseMyAccount(CloseMyAccountRequest request)
+		public Task<CloseMyAccountResultDto> CloseMyAccount(CloseMyAccountRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(CloseMyAccount),
+				() => CloseMyAccountCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<CloseMyAccountResultDto> CloseMyAccountCoreAsync(CloseMyAccountRequest request)
 		{
 			// 檢查request是否為null
 			if (request == null)
 			{
-				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The request is null.");
+				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed, "The request is null.");
 			}
 
 			// 檢查當前客戶是否已認證
 			if (!_currentCustomer.IsAuthenticated)
 			{
-				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"The current customer is not authenticated.");
+				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "The current customer is not authenticated.");
 			}
 
 			int customerId;
@@ -96,14 +110,16 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
-				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"Failed to retrieve the current customer ID.");
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(CloseMyAccount), (int)CustomerErrorCode.UnauthorizedAccess);
+				return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
 
 			// 檢查帳戶ID是否有效
 			if (request.AccountId <= 0)
 			{
 				// 如果帳戶ID無效，返回驗證失敗錯誤
-				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The account ID is invalid.");
+				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed, "The account ID is invalid.");
 			}
 
 			try
@@ -119,13 +135,13 @@ namespace ServerProject.Services
 				// 驗證客戶是否存在，如果不存在，返回客戶未找到錯誤
 				if (customer == null)
 				{
-					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.CustomerNotFound,"The customer does not exist.");
+					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.CustomerNotFound, "The customer does not exist.");
 				}
 
 				// 驗證客戶是否已被刪除，如果已被刪除，返回無效客戶資料錯誤
 				if (customer.IsDeleted)
 				{
-					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData,"The customer has been deleted.");
+					return CloseMyAccountResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData, "The customer has been deleted.");
 				}
 
 				// 查找帳戶資料，確保帳戶存在且屬於當前客戶
@@ -141,25 +157,25 @@ namespace ServerProject.Services
 				// 驗證帳戶是否存在，如果不存在，返回帳戶未找到錯誤
 				if (account == null)
 				{
-					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountNotFound,"The account does not exist.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountNotFound, "The account does not exist.");
 				}
 
 				// 驗證帳戶狀態，如果帳戶已關閉，返回帳戶已關閉錯誤
 				if (account.Status == AccountStatus.Closed)
 				{
-					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyClosed,"The account has already been closed.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyClosed, "The account has already been closed.");
 				}
 
 				// 驗證帳戶狀態，如果帳戶不是活動狀態，返回帳戶不可用錯誤
 				if (account.Status != AccountStatus.Active)
 				{
-					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountNotAvailable,"The account is not active.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountNotAvailable, "The account is not active.");
 				}
 
 				// 驗證帳戶餘額，如果帳戶餘額不為零，返回帳戶餘額不為零錯誤
 				if (account.Balance != 0)
 				{
-					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountBalanceNotZero,"The account balance is not zero.");
+					return CloseMyAccountResultDto.Failure((int)AccountErrorCode.AccountBalanceNotZero, "The account balance is not zero.");
 				}
 
 				var now = _timeProvider.Now();
@@ -207,13 +223,16 @@ namespace ServerProject.Services
 			}
 			catch (AccountOperationException ex)
 			{
+				LogCaughtAccountFailure(nameof(CloseMyAccount), (int)ex.ErrorCode);
 				// ServiceBase 已回滾，再轉換為失敗結果。
 				return CloseMyAccountResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(CloseMyAccount), (int)AccountErrorCode.UnableToOperateDb);
 				// ServiceBase 已回滾，再轉換為失敗結果。
-				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb,"A database error occurred during the operation.");
+				return CloseMyAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
 		}
 
@@ -222,7 +241,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">獲取我的帳戶請求參數</param>
 		/// <returns>返回我的帳戶信息結果</returns>
-		public async Task<GetMyAccountResultDto> GetMyAccount(GetMyAccountRequest request)
+		public Task<GetMyAccountResultDto> GetMyAccount(GetMyAccountRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(GetMyAccount),
+				() => GetMyAccountCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<GetMyAccountResultDto> GetMyAccountCoreAsync(GetMyAccountRequest request)
 		{
 			// 檢查request是否為null
 			if (request == null)
@@ -245,6 +272,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(GetMyAccount), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return GetMyAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -315,6 +344,8 @@ namespace ServerProject.Services
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(GetMyAccount), (int)AccountErrorCode.UnableToOperateDb);
 				// 捕获数据库异常，返回数据库操作错误
 				return GetMyAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
@@ -325,7 +356,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">獲取我的帳戶餘額請求參數</param>
 		/// <returns>返回我的帳戶餘額信息結果</returns>
-		public async Task<GetMyAccountBalanceResultDto> GetMyAccountBalance(GetMyAccountBalanceRequest request)
+		public Task<GetMyAccountBalanceResultDto> GetMyAccountBalance(GetMyAccountBalanceRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(GetMyAccountBalance),
+				() => GetMyAccountBalanceCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<GetMyAccountBalanceResultDto> GetMyAccountBalanceCoreAsync(GetMyAccountBalanceRequest request)
 		{
 			// 檢查request是否為null
 			if (request == null)
@@ -348,6 +387,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(GetMyAccountBalance), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return GetMyAccountBalanceResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -423,6 +464,8 @@ namespace ServerProject.Services
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(GetMyAccountBalance), (int)AccountErrorCode.UnableToOperateDb);
 				// 捕获数据库异常，返回数据库操作错误
 				return GetMyAccountBalanceResultDto.Failure((int)AccountErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
@@ -433,7 +476,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">獲取我的所有帳戶請求參數</param>
 		/// <returns>返回我的所有帳戶信息結果</returns>
-		public async Task<GetMyAccountsResultDto> GetMyAccounts(GetMyAccountsRequest request)
+		public Task<GetMyAccountsResultDto> GetMyAccounts(GetMyAccountsRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(GetMyAccounts),
+				() => GetMyAccountsCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<GetMyAccountsResultDto> GetMyAccountsCoreAsync(GetMyAccountsRequest request)
 		{
 			// 檢查request是否為null
 			if (request == null)
@@ -456,6 +507,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(GetMyAccounts), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
 				return GetMyAccountsResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
@@ -510,6 +563,8 @@ namespace ServerProject.Services
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(GetMyAccounts), (int)AccountErrorCode.UnableToOperateDb);
 				// 捕获数据库异常，返回数据库操作错误
 				return GetMyAccountsResultDto.Failure((int)AccountErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
@@ -548,18 +603,26 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">開戶請求參數</param>
 		/// <returns>返回開戶結果</returns>
-		public async Task<OpenAccountResultDto> OpenAccount(OpenAccountRequest request)
+		public Task<OpenAccountResultDto> OpenAccount(OpenAccountRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(OpenAccount),
+				() => OpenAccountCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<OpenAccountResultDto> OpenAccountCoreAsync(OpenAccountRequest request)
 		{
 			// 檢查request是否為null
 			if (request == null)
 			{
-				return OpenAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed,"The request is null.");
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.ValidationFailed, "The request is null.");
 			}
 
 			// 檢查當前客戶是否已認證
 			if (!_currentCustomer.IsAuthenticated)
 			{
-				return OpenAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"The current customer is not authenticated.");
+				return OpenAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "The current customer is not authenticated.");
 			}
 
 			int customerId;
@@ -571,20 +634,22 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(OpenAccount), (int)CustomerErrorCode.UnauthorizedAccess);
 				// 如果獲取客戶ID失敗，返回未授權訪問錯誤
-				return OpenAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess,"Failed to retrieve the current customer ID.");
+				return OpenAccountResultDto.Failure((int)CustomerErrorCode.UnauthorizedAccess, "Failed to retrieve the current customer ID.");
 			}
 
 			// 檢查帳戶類型是否有效，如果無效，返回錯誤
 			if (!Enum.IsDefined(typeof(AccountType), request.AccountType))
 			{
-				return OpenAccountResultDto.Failure((int)AccountErrorCode.InvalidAccountType,"The account type is invalid.");
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.InvalidAccountType, "The account type is invalid.");
 			}
 
 			// 檢查貨幣代碼是否有效，如果無效，返回錯誤
 			if (!Enum.IsDefined(typeof(CurrencyCode), request.Currency))
 			{
-				return OpenAccountResultDto.Failure((int)AccountErrorCode.InvalidCurrency,"The currency code is invalid.");
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.InvalidCurrency, "The currency code is invalid.");
 			}
 
 			try
@@ -604,13 +669,13 @@ namespace ServerProject.Services
 						// 如果客戶不存在，返回錯誤
 						if (customer == null)
 						{
-							return OpenAccountResultDto.Failure((int)CustomerErrorCode.CustomerNotFound,"The customer does not exist.");
+							return OpenAccountResultDto.Failure((int)CustomerErrorCode.CustomerNotFound, "The customer does not exist.");
 						}
 
 						// 如果客戶已被刪除，返回錯誤
 						if (customer.IsDeleted)
 						{
-							return OpenAccountResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData,"The customer has been deleted.");
+							return OpenAccountResultDto.Failure((int)CustomerErrorCode.InvalidCustomerData, "The customer has been deleted.");
 						}
 
 						// 持有客户锁后，再检查同币种未关闭账户。
@@ -623,7 +688,7 @@ namespace ServerProject.Services
 						// 如果客戶已經有同幣種的未關閉帳戶，返回錯誤
 						if (hasNonClosedAccount)
 						{
-							return OpenAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyExists,"The customer already has an available account with the same currency.");
+							return OpenAccountResultDto.Failure((int)AccountErrorCode.AccountAlreadyExists, "The customer already has an available account with the same currency.");
 						}
 
 						// Now() 按项目约定返回 UTC。
@@ -665,13 +730,16 @@ namespace ServerProject.Services
 			}
 			catch (AccountOperationException ex)
 			{
+				LogCaughtAccountFailure(nameof(OpenAccount), (int)ex.ErrorCode);
 				// ServiceBase 已回滚，再转换为失败结果。
-				return OpenAccountResultDto.Failure((int)ex.ErrorCode,ex.Message);
+				return OpenAccountResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(OpenAccount), (int)AccountErrorCode.UnableToOperateDb);
 				// ServiceBase 已回滚，再转换为失败结果。
-				return OpenAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb,"A database error occurred during the operation.");
+				return OpenAccountResultDto.Failure((int)AccountErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
 		}
 
@@ -680,7 +748,15 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">開戶並初始存款請求參數</param>
 		/// <returns>返回開戶並初始存款結果</returns>
-		public async Task<OpenAccountWithInitialDepositResultDto>OpenAccountWithInitialDeposit(OpenAccountWithInitialDepositRequest request)
+		public Task<OpenAccountWithInitialDepositResultDto> OpenAccountWithInitialDeposit(OpenAccountWithInitialDepositRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(OpenAccountWithInitialDeposit),
+				() => OpenAccountWithInitialDepositCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<OpenAccountWithInitialDepositResultDto> OpenAccountWithInitialDepositCoreAsync(OpenAccountWithInitialDepositRequest request)
 		{
 			if (request == null)
 			{
@@ -711,6 +787,8 @@ namespace ServerProject.Services
 			}
 			catch (InvalidOperationException)
 			{
+				_logger.LogDebug("{Operation} could not retrieve the current customer ID. ErrorCode={ErrorCode}",
+					nameof(OpenAccountWithInitialDeposit), (int)CustomerErrorCode.UnauthorizedAccess);
 				return OpenAccountWithInitialDepositResultDto.Failure(
 					(int)CustomerErrorCode.UnauthorizedAccess,
 					"Failed to retrieve the current customer ID.");
@@ -852,6 +930,7 @@ namespace ServerProject.Services
 			}
 			catch (AccountOperationException ex)
 			{
+				LogCaughtAccountFailure(nameof(OpenAccountWithInitialDeposit), (int)ex.ErrorCode);
 				// ServiceBase 已回滚，再转换为失败结果。
 				return OpenAccountWithInitialDepositResultDto.Failure(
 					(int)ex.ErrorCode,
@@ -859,18 +938,88 @@ namespace ServerProject.Services
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(OpenAccountWithInitialDeposit), (int)AccountErrorCode.UnableToOperateDb);
 				return OpenAccountWithInitialDepositResultDto.Failure(
 					(int)AccountErrorCode.UnableToOperateDb,
 					"A database error occurred during the operation.");
 			}
 		}
+
+		/// <summary>
+		/// 区分系统故障和业务拒绝。查询遇到无效币种表示已存储的数据有问题。
+		/// </summary>
+		private static LogOutcome GetFailureOutcome(string operation, int errorCode)
+		{
+			return errorCode switch
+			{
+				(int)AccountErrorCode.UnableToOperateDb
+					or (int)AccountErrorCode.AccountCreationFailed
+					or (int)AccountErrorCode.InitialDepositFailed => LogOutcome.Failed,
+				(int)AccountErrorCode.InvalidCurrency when operation is
+					nameof(GetMyAccount) or nameof(GetMyAccountBalance) or nameof(GetMyAccounts)
+					=> LogOutcome.Failed,
+				_ => LogOutcome.Rejected
+			};
+		}
+
+		/// <summary>
+		/// 记录已捕获的账户操作异常。
+		/// </summary>
+		private void LogCaughtAccountFailure(string operation, int errorCode)
+		{
+			var level = GetFailureOutcome(operation, errorCode) == LogOutcome.Failed
+				? LogLevel.Error
+				: LogLevel.Debug;
+
+			_logger.Log(level, "{Operation} caught an account operation exception. ErrorCode={ErrorCode}",
+				operation, errorCode);
+		}
+
+		/// <summary>
+		/// 执行账户操作并记录开始、结束、耗时和结果。
+		/// </summary>
+		private async Task<TResult> ExecuteWithLoggingAsync<TResult>(
+			string operation,
+			Func<Task<TResult>> execute,
+			Func<TResult, (bool Success, int Code)> getResult)
+		{
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+			int? errorCode = null;
+
+			_logger.LogStart(operation: operation);
+
+			try
+			{
+				var result = await execute();
+				var (success, code) = getResult(result);
+
+				if (success)
+				{
+					outcome = LogOutcome.Completed;
+				}
+				else
+				{
+					errorCode = code;
+					outcome = GetFailureOutcome(operation, code);
+				}
+
+				return result;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode, operation: operation);
+			}
+		}
+
 	}
 
 	/// <summary>
 	/// 賬戶邏輯接口，定義帳戶相關的業務邏輯方法
 	/// </summary>
 	public interface IAccountService
-    {
+	{
 		/// <summary>
 		/// 開戶操作，根據請求參數創建新的帳戶並返回結果
 		/// </summary>

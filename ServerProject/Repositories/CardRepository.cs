@@ -2,6 +2,7 @@
 using ServerProject.Common;
 using ServerProject.Entities;
 using ShareProject.Common;
+using System.Diagnostics;
 
 namespace ServerProject.Repositories
 {
@@ -10,8 +11,14 @@ namespace ServerProject.Repositories
     /// </summary>
     public class CardRepository : RepositoryBase, ICardRepository
     {
-		public CardRepository(IDataAccess dataAccess) : base(dataAccess)
+		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<CardRepository> _logger;
+
+		public CardRepository(IDataAccess dataAccess, ILogger<CardRepository> logger) : base(dataAccess)
 		{
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -23,15 +30,29 @@ namespace ServerProject.Repositories
 		/// <param name="updatedAt">更新時間</param>
 		public async Task<int> DeactivateAllCards(long accountId, CardStatus status, DateTime deactivatedAt, DateTime updatedAt)
         {
-            var sql = LoadSql("Card.DeactivateAllCards");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.ExecuteAsync(sql, new
-            {
-                AccountId = accountId,
-                Status = status,
-                DeactivatedAt = deactivatedAt,
-                UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.DeactivateAllCards");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					AccountId = accountId,
+					Status = status,
+					DeactivatedAt = deactivatedAt,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -41,8 +62,23 @@ namespace ServerProject.Repositories
         /// <returns>卡片模型</returns>
         public async Task<CardEntity?> GetCardById(long cardId)
         {
-            var sql = LoadSql("Card.GetCardById");
-            return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CardEntity>(sql, new { CardId = cardId }, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.GetCardById");
+				var card = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CardEntity>(sql, new { CardId = cardId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return card;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -52,10 +88,23 @@ namespace ServerProject.Repositories
         /// <returns>卡片模型列表</returns>
         public async Task<List<CardEntity>> GetCardsByAccountId(long accountId)
         {
-            var sql = LoadSql("Card.GetCardsByAccountId");
-            var cards = await _dataAccess.DbConnection.QueryAsync<CardEntity>(sql, new { AccountId = accountId }, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return cards.ToList();
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.GetCardsByAccountId");
+				var cards = (await _dataAccess.DbConnection.QueryAsync<CardEntity>(sql, new { AccountId = accountId }, _dataAccess.DbTransaction)).AsList();
+
+				outcome = LogOutcome.Completed;
+				return cards;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -68,9 +117,31 @@ namespace ServerProject.Repositories
 		/// <returns>卡片数量</returns>
 		public async Task<int> CountUsableCardsByAccountIdAndType(long accountId,CardType cardType,short currentYear,short currentMonth)
         {
-            var sql = LoadSql("Card.CountUsableCardsByAccountIdAndType");
-            return await _dataAccess.DbConnection.ExecuteScalarAsync<int>(sql, new { AccountId = accountId, CardType = cardType, CurrentYear = currentYear, CurrentMonth = currentMonth,ActiveStatus = CardStatus.Active,BlockedStatus = CardStatus.Blocked
-			}, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.CountUsableCardsByAccountIdAndType");
+				var count = await _dataAccess.DbConnection.ExecuteScalarAsync<int>(sql, new
+				{
+					AccountId = accountId,
+					CardType = cardType,
+					CurrentYear = currentYear,
+					CurrentMonth = currentMonth,
+					ActiveStatus = CardStatus.Active,
+					BlockedStatus = CardStatus.Blocked
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -80,8 +151,23 @@ namespace ServerProject.Repositories
         /// <returns>新插入卡片的ID</returns>
         public async Task<long> InsertNewCard(CardEntity card)
         {
-            var sql = LoadSql("Card.InsertNewCard");
-            return await _dataAccess.DbConnection.ExecuteScalarAsync<long>(sql, card, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.InsertNewCard");
+				var cardId = await _dataAccess.DbConnection.ExecuteScalarAsync<long>(sql, card, _dataAccess.DbTransaction);
+
+				outcome = cardId > 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return cardId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -92,13 +178,28 @@ namespace ServerProject.Repositories
 		/// <param name="updatedAt">更新時間</param>
 		public async Task<int> UpdateCardPIN(long cardId, string newPINHash, DateTime updatedAt)
         {
-            var sql = LoadSql("Card.UpdateCardPIN");
-            return await _dataAccess.DbConnection.ExecuteAsync(sql, new
-            {
-                CardId = cardId,
-                PINHash = newPINHash,
-                UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.UpdateCardPIN");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					CardId = cardId,
+					PINHash = newPINHash,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -110,14 +211,34 @@ namespace ServerProject.Repositories
 		/// <param name="updatedAt">更新時間</param>
 		public async Task<int> UpdateCardStatusIfCurrentStatus(long cardId,CardStatus currentStatus,CardStatus newStatus,DateTime updatedAt)
         {
-            var sql = LoadSql("Card.UpdateCardStatusIfCurrentStatus");
-            return await _dataAccess.DbConnection.ExecuteAsync(sql, new
-            {
-				CardId = cardId,
-				CurrentStatus = currentStatus,
-				NewStatus = newStatus,
-				UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.UpdateCardStatusIfCurrentStatus");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					CardId = cardId,
+					CurrentStatus = currentStatus,
+					NewStatus = newStatus,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count switch
+				{
+					1 => LogOutcome.Completed,
+					0 => LogOutcome.Rejected,
+					_ => LogOutcome.Failed
+				};
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -129,14 +250,29 @@ namespace ServerProject.Repositories
 		/// <param name="updatedAt">更新時間</param>
 		public async Task<int> UpdatePINFailCount(long cardId, short newFailCount,DateTime updatedAt, DateTime? lockedUntil = null)
         {
-            var sql = LoadSql("Card.UpdateCardPINFailCount");
-            return await _dataAccess.DbConnection.ExecuteAsync(sql, new
-            {
-                CardId = cardId,
-                PINFailCount = newFailCount,
-                PINLockedUntil = lockedUntil,
-                UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.UpdateCardPINFailCount");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					CardId = cardId,
+					PINFailCount = newFailCount,
+					PINLockedUntil = lockedUntil,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -146,8 +282,23 @@ namespace ServerProject.Repositories
 		/// <returns>卡片模型</returns>
 		public async Task<CardEntity?> GetCardByIdForUpdate(long cardId)
 		{
-			var sql = LoadSql("Card.GetCardByIdForUpdate");
-			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CardEntity>(sql, new { CardId = cardId }, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.GetCardByIdForUpdate");
+				var card = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CardEntity>(sql, new { CardId = cardId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return card;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 
 		}
 
@@ -161,20 +312,39 @@ namespace ServerProject.Repositories
 		/// <returns>受影響的行數</returns>
 		public async Task<int> DeactivateCardForReplacement(long cardId, CardStatus currentStatus, long newCardId, DateTime now)
 		{
-			var sql = LoadSql("Card.DeactivateCardForReplacement");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.ExecuteAsync(
-				sql,
-				new
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Card.DeactivateCardForReplacement");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(
+					sql,
+					new
+					{
+						CardId = cardId,
+						CurrentStatus = currentStatus,
+						InactiveStatus = CardStatus.Inactive,
+						NewCardId = newCardId,
+						DeactivatedAt = now,
+						UpdatedAt = now
+					},
+					_dataAccess.DbTransaction);
+
+				outcome = count switch
 				{
-					CardId = cardId,
-					CurrentStatus = currentStatus,
-					InactiveStatus = CardStatus.Inactive,
-					NewCardId = newCardId,
-					DeactivatedAt = now,
-					UpdatedAt = now
-				},
-				_dataAccess.DbTransaction);
+					1 => LogOutcome.Completed,
+					0 => LogOutcome.Rejected,
+					_ => LogOutcome.Failed
+				};
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 	}
 

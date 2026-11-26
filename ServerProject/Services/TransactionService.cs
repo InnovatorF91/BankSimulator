@@ -4,6 +4,8 @@ using ServerProject.Entities;
 using ServerProject.Repositories;
 using ShareProject.Common;
 using ShareProject.Request;
+using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace ServerProject.Services
 {
@@ -16,11 +18,6 @@ namespace ServerProject.Services
 		/// 帳戶服務實例，用於處理帳戶相關的數據操作
 		/// </summary>
 		private readonly IAccountRepository _accountRepository;
-
-		/// <summary>
-		/// 客戶服務實例，用於處理客戶相關的操作
-		/// </summary>
-		private readonly ICustomerRepository _customerRepository;
 
 		/// <summary>
 		/// 交易服務實例，用於處理交易相關的操作
@@ -38,6 +35,11 @@ namespace ServerProject.Services
 		private readonly ITimeProvider _timeProvider;
 
 		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<TransactionService> _logger;
+
+		/// <summary>
 		/// 最大允許的交易金額，超過此金額的交易將被拒絕
 		/// </summary>
 		private const decimal MaxAmount = 9999999999999.99m;
@@ -51,20 +53,63 @@ namespace ServerProject.Services
 		/// <param name="transactionRepository">交易服務實例</param>
 		/// <param name="currentCustomer">当前登录客户信息</param>
 		/// <param name="timeProvider">時間提供者實例</param>
+		/// <param name="logger">用于记录交易服务运行日志的记录器。</param>
 		public TransactionService(
 			IConnectionFactory connectionFactory,
 			IAccountRepository accountRepository,
-			ICustomerRepository customerRepository,
 			ITransactionRepository transactionRepository,
 			ICurrentCustomer currentCustomer,
-			ITimeProvider timeProvider
+			ITimeProvider timeProvider,
+			ILogger<TransactionService> logger
 		) : base(connectionFactory)
 		{
 			_accountRepository = accountRepository;
-			_customerRepository = customerRepository;
 			_transactionRepository = transactionRepository;
 			_currentCustomer = currentCustomer;
 			_timeProvider = timeProvider;
+			_logger = logger;
+		}
+
+		/// <inheritdoc />
+		public async Task<DepositResultDto> Deposit(DepositRequest request)
+		{
+			var stopwatch = Stopwatch.StartNew();
+
+			// 如果有未处理异常向上传播，finally 会以 Failed 记录本次操作。
+			var outcome = LogOutcome.Failed;
+
+			int? errorCode = null;
+
+			_logger.LogStart();
+
+			try
+			{
+				var result = await DepositCoreAsync(request);
+
+				if (result.Success)
+				{
+					// 存款事务提交后，DepositCoreAsync 才会返回成功结果。
+					outcome = LogOutcome.Completed;
+				}
+				else
+				{
+					errorCode = result.Code;
+					outcome = result.Code switch
+					{
+						(int)TransactionErrorCode.AccountBalanceUpdateFailed
+							or (int)TransactionErrorCode.TransactionInsertFailed
+							or (int)TransactionErrorCode.UnableToOperateDb
+							or (int)AccountErrorCode.InvalidCurrency => LogOutcome.Failed,
+						_ => LogOutcome.Rejected
+					};
+				}
+
+				return result;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode);
+			}
 		}
 
 		/// <summary>
@@ -72,7 +117,7 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">存款请求</param>
 		/// <returns>存款结果Dto</returns>
-		public async Task<DepositResultDto> Deposit(DepositRequest request)
+		private async Task<DepositResultDto> DepositCoreAsync(DepositRequest request)
 		{
 			int customerId;
 
@@ -232,22 +277,64 @@ namespace ServerProject.Services
 			}
 			catch (TransactionOperationException ex)
 			{
-				//发生异常则 Rollback
+				_logger.LogError("Deposit write failed. ErrorCode={ErrorCode}", (int)ex.ErrorCode);
 				return DepositResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				//发生异常则 Rollback
+				_logger.LogError("Deposit encountered a database error.");
 				return DepositResultDto.Failure((int)TransactionErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}
 		}
 
-		/// <summary>
-		/// 转账操作
-		/// </summary>
-		/// <param name="request">转账请求</param>
-		/// <returns>转账结果Dto</returns>
+		/// <inheritdoc />
 		public async Task<TransferResultDto> Transfer(TransferRequest request)
+		{
+			var stopwatch = Stopwatch.StartNew();
+
+			// 如果有未处理异常向上传播，finally 会以 Failed 记录本次操作。
+			var outcome = LogOutcome.Failed;
+
+			int? errorCode = null;
+
+			_logger.LogStart();
+
+			try
+			{
+				var result = await TransferCoreAsync(request);
+
+				if (result.Success)
+				{
+					// 转账事务提交后，TransferCoreAsync 才会返回成功结果。
+					outcome = LogOutcome.Completed;
+				}
+				else
+				{
+					errorCode = result.Code;
+					outcome = result.Code switch
+					{
+						(int)TransactionErrorCode.AccountBalanceUpdateFailed
+							or (int)TransactionErrorCode.TransactionInsertFailed
+							or (int)TransactionErrorCode.UnableToOperateDb
+							or (int)AccountErrorCode.InvalidCurrency => LogOutcome.Failed,
+						_ => LogOutcome.Rejected
+					};
+				}
+
+				return result;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode);
+			}
+		}
+
+		/// <summary>
+		/// 校验转账请求，并在同一事务内更新双方账户余额和写入交易记录。
+		/// </summary>
+		/// <param name="request">转账请求。</param>
+		/// <returns>提交后的转账结果，或包含错误码的失败结果。</returns>
+		private async Task<TransferResultDto> TransferCoreAsync(TransferRequest request)
 		{
 			int customerId;
 
@@ -516,19 +603,60 @@ namespace ServerProject.Services
 			}
 			catch (TransactionOperationException ex)
 			{
-				//发生异常则 Rollback
+				_logger.LogError("Transfer write failed. ErrorCode={ErrorCode}", (int)ex.ErrorCode);
 				return TransferResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (DbDeadlockException)
 			{
-				return TransferResultDto.Failure(
-					(int)TransactionErrorCode.UnableToOperateDb,
-					"Database deadlock detected. Please retry the transaction.");
+				_logger.LogError("Transfer encountered a database deadlock.");
+				return TransferResultDto.Failure((int)TransactionErrorCode.UnableToOperateDb,"Database deadlock detected. Please retry the transaction.");
 			}
 			catch (UnableToOperateDBException)
 			{
-				//发生异常则 Rollback
+				_logger.LogError("Transfer encountered a database error.");
 				return TransferResultDto.Failure((int)TransactionErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
+			}
+		}
+
+		/// <inheritdoc />
+		public async Task<WithdrawResultDto> Withdraw(WithdrawRequest request)
+		{
+			var stopwatch = Stopwatch.StartNew();
+
+			// 如果有未处理异常向上传播，finally 会以 Failed 记录本次操作。
+			var outcome = LogOutcome.Failed;
+
+			int? errorCode = null;
+
+			_logger.LogStart();
+
+			try
+			{
+				var result = await WithdrawCoreAsync(request);
+
+				if (result.Success)
+				{
+					// 取款事务提交后，WithdrawCoreAsync 才会返回成功结果。
+					outcome = LogOutcome.Completed;
+				}
+				else
+				{
+					errorCode = result.Code;
+					outcome = result.Code switch
+					{
+						(int)TransactionErrorCode.AccountBalanceUpdateFailed
+							or (int)TransactionErrorCode.TransactionInsertFailed
+							or (int)TransactionErrorCode.UnableToOperateDb
+							or (int)AccountErrorCode.InvalidCurrency => LogOutcome.Failed,
+						_ => LogOutcome.Rejected
+					};
+				}
+
+				return result;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode);
 			}
 		}
 
@@ -537,7 +665,7 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">取款请求</param>
 		/// <returns>取款结果Dto</returns>
-		public async Task<WithdrawResultDto> Withdraw(WithdrawRequest request)
+		private async Task<WithdrawResultDto> WithdrawCoreAsync(WithdrawRequest request)
 		{
 			int customerId;
 
@@ -697,13 +825,55 @@ namespace ServerProject.Services
 			}
 			catch (TransactionOperationException ex)
 			{
-				//发生异常则 Rollback
+				_logger.LogError("Withdrawal write failed. ErrorCode={ErrorCode}", (int)ex.ErrorCode);
 				return WithdrawResultDto.Failure((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
-				//发生异常则 Rollback
+				_logger.LogError("Withdrawal encountered a database error.");
 				return WithdrawResultDto.Failure((int)TransactionErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
+			}
+		}
+
+		/// <inheritdoc />
+		public async Task<GetMyTransactionResultDto> GetMyTransactions(GetMyTransactionRequest request)
+		{
+			var stopwatch = Stopwatch.StartNew();
+
+			// 如果有未处理异常向上传播，finally 会以 Failed 记录本次操作。
+			var outcome = LogOutcome.Failed;
+
+			int? errorCode = null;
+
+			_logger.LogStart();
+
+			try
+			{
+				var result = await GetMyTransactionsCoreAsync(request);
+
+				if (result.Success)
+				{
+					// 查询完成后记录成功，空列表也是有效结果。
+					outcome = LogOutcome.Completed;
+				}
+				else
+				{
+					errorCode = result.Code;
+					outcome = result.Code switch
+					{
+						(int)TransactionErrorCode.AccountBalanceUpdateFailed
+							or (int)TransactionErrorCode.TransactionInsertFailed
+							or (int)TransactionErrorCode.UnableToOperateDb
+							or (int)AccountErrorCode.InvalidCurrency => LogOutcome.Failed,
+						_ => LogOutcome.Rejected
+					};
+				}
+
+				return result;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode);
 			}
 		}
 
@@ -712,7 +882,7 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">获取交易记录请求</param>
 		/// <returns>获取交易记录结果Dto</returns>
-		public async Task<GetMyTransactionResultDto> GetMyTransactions(GetMyTransactionRequest request)
+		private async Task<GetMyTransactionResultDto> GetMyTransactionsCoreAsync(GetMyTransactionRequest request)
 		{
 			int customerId;
 
@@ -906,6 +1076,8 @@ namespace ServerProject.Services
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("GetMyTransactions encountered a database error.");
+
 				// 捕获数据库异常，返回数据库操作错误
 				return GetMyTransactionResultDto.Failure((int)TransactionErrorCode.UnableToOperateDb, "A database error occurred during the operation.");
 			}

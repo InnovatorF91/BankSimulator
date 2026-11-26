@@ -1,6 +1,7 @@
 ﻿using Dapper;
 using ServerProject.Common;
 using ServerProject.Entities;
+using System.Diagnostics;
 
 namespace ServerProject.Repositories
 {
@@ -9,8 +10,14 @@ namespace ServerProject.Repositories
     /// </summary>
     public class CustomerAuthRepository : RepositoryBase, ICustomerAuthRepository, ICustomerSessionRepository, IRefreshTokenRepository ,IPasswordResetTokenRepository
 	{
-		public CustomerAuthRepository(IDataAccess dataAccess) : base(dataAccess)
+		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<CustomerAuthRepository> _logger;
+
+		public CustomerAuthRepository(IDataAccess dataAccess, ILogger<CustomerAuthRepository> logger) : base(dataAccess)
 		{
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -20,21 +27,49 @@ namespace ServerProject.Repositories
 		/// <returns>删除結果數量</returns>
 		public async Task<int> RemoveAuthEntry(CustomerAuthEntity customerAuth)
         {
-			var sql = LoadSql("CustomerAuth.DeleteAuthEntry");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, customerAuth, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.DeleteAuthEntry");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, customerAuth, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
-        /// <summary>
-        /// 根據客戶ID獲取客戶認證信息
-        /// </summary>
-        /// <param name="customerId">客戶ID</param>
-        /// <returns>客戶認證信息</returns>
-        public async Task<CustomerAuthEntity?> GetAuthByCustomerId(int customerId)
+		/// <summary>
+		/// 根據客戶ID獲取客戶認證信息
+		/// </summary>
+		/// <param name="customerId">客戶ID</param>
+		/// <returns>客戶認證信息</returns>
+		public async Task<CustomerAuthEntity?> GetAuthByCustomerId(int customerId)
         {
-            var sql = LoadSql("CustomerAuth.GetAuthByCustomerId");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerAuthEntity>(sql, new { CustomerId = customerId }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.GetAuthByCustomerId");
+				var auth = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerAuthEntity>(sql, new { CustomerId = customerId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return auth;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -44,9 +79,23 @@ namespace ServerProject.Repositories
 		/// <returns>插入結果數量</returns>
 		public async Task<int> InsertAuthEntry(CustomerAuthEntity customerAuth)
         {
-            var sql = LoadSql("CustomerAuth.InsertAuthEntry");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, customerAuth, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.InsertAuthEntry");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, customerAuth, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -56,9 +105,23 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> UpdateAuthEntry(CustomerAuthEntity customerAuth)
         {
-            var sql = LoadSql("CustomerAuth.UpdateAuthEntry");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, customerAuth, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.UpdateAuthEntry");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, customerAuth, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -68,9 +131,23 @@ namespace ServerProject.Repositories
 		/// <returns>客戶認證信息</returns>
 		public async Task<CustomerAuthEntity?> GetAuthByLoginId(string loginId)
 		{
-			var sql = LoadSql("CustomerAuth.GetAuthByLoginId");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerAuthEntity>(sql, new { LoginId = loginId }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.GetAuthByLoginId");
+				var auth = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerAuthEntity>(sql, new { LoginId = loginId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return auth;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -82,13 +159,28 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> UpdatePasswordHash(int userId, string hash, DateTime updateDate)
 		{
-			var sql = LoadSql("CustomerAuth.UpdatePasswordHash");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				Hash = hash,
-				UpdateDate = updateDate
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.UpdatePasswordHash");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					Hash = hash,
+					UpdateDate = updateDate
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -99,12 +191,27 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> UpdateFailedCount(int userId, DateTime updateDate)
 		{
-			var sql = LoadSql("CustomerAuth.UpdateFailedCount");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				UpdateDate = updateDate
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.UpdateFailedCount");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					UpdateDate = updateDate
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -116,13 +223,28 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> Lock(int userId, DateTime lockedUntil, DateTime updateDate)
 		{
-			var sql = LoadSql("CustomerAuth.LockAccount");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				LockedUntil = lockedUntil,
-				UpdateDate = updateDate
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.LockAccount");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					LockedUntil = lockedUntil,
+					UpdateDate = updateDate
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -133,12 +255,27 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> UnLock(int userId, DateTime updateDate)
 		{
-			var sql = LoadSql("CustomerAuth.UnlockAccount");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				UpdateDate = updateDate
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.UnlockAccount");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					UpdateDate = updateDate
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -149,12 +286,27 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> RevokeRefreshToken(Guid tokenId, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.RevokeRefresh");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				TokenId = tokenId,
-				Now = now
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.RevokeRefresh");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					TokenId = tokenId,
+					Now = now
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -165,12 +317,27 @@ namespace ServerProject.Repositories
 		/// <returns>被撤銷的令牌數量</returns>
 		public async Task<int> RevokeAllRefreshTokens(int userId, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.RevokeAllRefresh");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				Now = now
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.RevokeAllRefresh");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					Now = now
+				}, _dataAccess.DbTransaction);
+
+				outcome = count >= 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -181,12 +348,27 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> BumpTokenVersion(int userId, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.BumpTokenVersion");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				Now = now
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.BumpTokenVersion");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					Now = now
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -200,15 +382,30 @@ namespace ServerProject.Repositories
 		/// <returns>新會話</returns>
 		public async Task<Guid?> CreateSession(int userId, string? device, string? ip, DateTime now, DateTime expiredAt)
 		{
-			var sql = LoadSql("CustomerAuth.CreateSession");
-			return await _dataAccess.DbConnection.ExecuteScalarAsync<Guid>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				Device = device,
-				Ip = ip,
-				Now = now,
-				ExpiredAt = expiredAt
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.CreateSession");
+				var sessionId = await _dataAccess.DbConnection.ExecuteScalarAsync<Guid>(sql, new
+				{
+					UserId = userId,
+					Device = device,
+					Ip = ip,
+					Now = now,
+					ExpiredAt = expiredAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = sessionId == Guid.Empty ? LogOutcome.Failed : LogOutcome.Completed;
+				return sessionId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -219,12 +416,27 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> InvalidateSession(Guid sessionId, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.InvalidateSession");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				SessionId = sessionId,
-				Now = now
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.InvalidateSession");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					SessionId = sessionId,
+					Now = now
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -235,12 +447,27 @@ namespace ServerProject.Repositories
 		/// <returns>被使無效的會話數量</returns>
 		public async Task<int> InvalidateAllSessions(int userId, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.InvalidateAllSessions");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				Now = now
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.InvalidateAllSessions");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					Now = now
+				}, _dataAccess.DbTransaction);
+
+				outcome = count >= 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -252,18 +479,37 @@ namespace ServerProject.Repositories
 		/// <param name="absoluteLifetime">绝对生存时间</param>
 		public async Task<int> Touch(Guid sessionId,DateTime now,TimeSpan idleTimeout,TimeSpan absoluteLifetime)
 		{
-			var sql = LoadSql("CustomerAuth.TouchSession");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.ExecuteAsync(
-				sql,
-				new
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.TouchSession");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(
+					sql,
+					new
+					{
+						SessionId = sessionId,
+						Now = now,
+						IdleTimeout = idleTimeout,
+						AbsoluteLifetime = absoluteLifetime
+					},
+					_dataAccess.DbTransaction);
+
+				outcome = count switch
 				{
-					SessionId = sessionId,
-					Now = now,
-					IdleTimeout = idleTimeout,
-					AbsoluteLifetime = absoluteLifetime
-				},
-				_dataAccess.DbTransaction);
+					1 => LogOutcome.Completed,
+					0 => LogOutcome.Rejected,
+					_ => LogOutcome.Failed
+				};
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -279,17 +525,32 @@ namespace ServerProject.Repositories
 		/// <returns>令牌ID</returns>
 		public async Task<Guid?> StoreRefreshToken(int userId, string tokenHash, DateTime issuedAt, DateTime expiresAt, string? device, string? ip,int tokenVersion)
 		{
-			var sql = LoadSql("CustomerAuth.StoreRefresh");
-			return await _dataAccess.DbConnection.ExecuteScalarAsync<Guid>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				TokenHash = tokenHash,
-				IssuedAt = issuedAt,
-				ExpiresAt = expiresAt,
-				Device = device,
-				Ip = ip,
-				TokenVersion = tokenVersion
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.StoreRefresh");
+				var refreshTokenId = await _dataAccess.DbConnection.ExecuteScalarAsync<Guid>(sql, new
+				{
+					UserId = userId,
+					TokenHash = tokenHash,
+					IssuedAt = issuedAt,
+					ExpiresAt = expiresAt,
+					Device = device,
+					Ip = ip,
+					TokenVersion = tokenVersion
+				}, _dataAccess.DbTransaction);
+
+				outcome = refreshTokenId == Guid.Empty ? LogOutcome.Failed : LogOutcome.Completed;
+				return refreshTokenId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -301,13 +562,28 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> UpdateAuthType(int userId, short authType, DateTime updateDate)
 		{
-			var sql = LoadSql("CustomerAuth.UpdateAuthType");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				AuthType = authType,
-				UpdateDate = updateDate
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.UpdateAuthType");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					AuthType = authType,
+					UpdateDate = updateDate
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -320,14 +596,29 @@ namespace ServerProject.Repositories
 		/// <returns>任務結果，包含受影響的行數</returns>
 		public async Task<int> BeginEnableTwoFactor(int userId, string secret, DateTime now, DateTime expiresAt)
 		{
-			var sql = LoadSql("CustomerAuth.BeginEnableTwoFactor");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				UserId = userId,
-				Secret = secret,
-				Now = now,
-				ExpiresAt = expiresAt
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.BeginEnableTwoFactor");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					UserId = userId,
+					Secret = secret,
+					Now = now,
+					ExpiresAt = expiresAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -339,17 +630,31 @@ namespace ServerProject.Repositories
 		/// <returns>任務結果，包含受影響的行數</returns>
 		public async Task<int> ConfirmEnableTwoFactor(int userId, string expectedSecret, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.ConfirmEnableTwoFactor");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.ExecuteAsync(
-				sql,
-				new
-				{
-					UserId = userId,
-					ExpectedSecret = expectedSecret,
-					Now = now
-				},
-				_dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.ConfirmEnableTwoFactor");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(
+					sql,
+					new
+					{
+						UserId = userId,
+						ExpectedSecret = expectedSecret,
+						Now = now
+					},
+					_dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -359,8 +664,23 @@ namespace ServerProject.Repositories
 		/// <returns>客戶會話模型</returns>
 		public async Task<CustomerSessionEntity?> GetSessionById(Guid sessionId)
 		{
-			var sql = LoadSql("CustomerAuth.GetSessionById");
-			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerSessionEntity>(sql, new { SessionId = sessionId }, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.GetSessionById");
+				var session = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<CustomerSessionEntity>(sql, new { SessionId = sessionId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return session;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -370,8 +690,23 @@ namespace ServerProject.Repositories
 		/// <returns>刷新令牌信息</returns>
 		public async Task<RefreshTokenEntity?> GetRefreshTokenByTokenHash(string refreshTokenHash)
 		{
-			var sql = LoadSql("CustomerAuth.GetRefreshTokenByTokenHash");
-			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<RefreshTokenEntity>(sql, new { RefreshTokenHash = refreshTokenHash }, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.GetRefreshTokenByTokenHash");
+				var refreshToken = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<RefreshTokenEntity>(sql, new { RefreshTokenHash = refreshTokenHash }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return refreshToken;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -383,13 +718,28 @@ namespace ServerProject.Repositories
 		/// <returns>任务结果，包含受影响的行数</returns>
 		public async Task<int> UpdatePasswordHashAndBumpTokenVersion(int userId, string newPwdHash, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.UpdatePasswordHashAndBumpTokenVersion");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = userId,
-				PasswordHash = newPwdHash,
-				Now = now
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.UpdatePasswordHashAndBumpTokenVersion");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					CustomerId = userId,
+					PasswordHash = newPwdHash,
+					Now = now
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -400,12 +750,27 @@ namespace ServerProject.Repositories
 		/// <returns>任务结果，包含受影响的行数</returns>
 		public async Task<int> DisableTwoFactor(int customerId, DateTime updatedAt)
 		{
-			var sql = LoadSql("CustomerAuth.DisableTwoFactor");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = customerId,
-				UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.DisableTwoFactor");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					CustomerId = customerId,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -420,16 +785,31 @@ namespace ServerProject.Repositories
 		/// <returns>令牌ID</returns>
 		public async Task<Guid?> StoreResetToken(int customerId, string tokenHash, DateTime createdAt, DateTime expiresAt, string? createdByIp, string? createdByDevice)
 		{
-			var sql = LoadSql("CustomerAuth.StoreResetToken");
-			return await _dataAccess.DbConnection.ExecuteScalarAsync<Guid>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = customerId,
-				TokenHash = tokenHash,
-				CreatedAt = createdAt,
-				ExpiresAt = expiresAt,
-				CreatedByIp = createdByIp,
-				CreatedByDevice = createdByDevice
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.StoreResetToken");
+				var resetTokenId = await _dataAccess.DbConnection.ExecuteScalarAsync<Guid>(sql, new
+				{
+					CustomerId = customerId,
+					TokenHash = tokenHash,
+					CreatedAt = createdAt,
+					ExpiresAt = expiresAt,
+					CreatedByIp = createdByIp,
+					CreatedByDevice = createdByDevice
+				}, _dataAccess.DbTransaction);
+
+				outcome = resetTokenId == Guid.Empty ? LogOutcome.Failed : LogOutcome.Completed;
+				return resetTokenId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -440,12 +820,27 @@ namespace ServerProject.Repositories
 		/// <returns>被撤銷的令牌數量</returns>
 		public async Task<int> RevokeActiveResetTokens(int customerId, DateTime now)
 		{
-			var sql = LoadSql("CustomerAuth.RevokeActiveResetTokens");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = customerId,
-				Now = now
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.RevokeActiveResetTokens");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					CustomerId = customerId,
+					Now = now
+				}, _dataAccess.DbTransaction);
+
+				outcome = count >= 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -455,8 +850,23 @@ namespace ServerProject.Repositories
 		/// <returns>密碼重置令牌信息</returns>
 		public async Task<PasswordResetTokenEntity?> GetResetTokenByTokenHash(string tokenHash)
 		{
-			var sql = LoadSql("CustomerAuth.GetResetTokenByTokenHash");
-			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<PasswordResetTokenEntity>(sql, new { TokenHash = tokenHash }, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("CustomerAuth.GetResetTokenByTokenHash");
+				var resetToken = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<PasswordResetTokenEntity>(sql, new { TokenHash = tokenHash }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return resetToken;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -467,12 +877,27 @@ namespace ServerProject.Repositories
 		/// <returns>更新結果數量</returns>
 		public async Task<int> MarkResetTokenAsUsed(Guid tokenId, DateTime usedAt)
 		{
-			var sql = LoadSql("CustomerAuth.MarkResetTokenAsUsed");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				TokenId = tokenId,
-				UsedAt = usedAt
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("CustomerAuth.MarkResetTokenAsUsed");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					TokenId = tokenId,
+					UsedAt = usedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 	}
 

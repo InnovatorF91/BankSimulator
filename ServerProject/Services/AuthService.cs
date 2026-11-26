@@ -1,4 +1,5 @@
-﻿using ServerProject.Common;
+﻿using System.Diagnostics;
+using ServerProject.Common;
 using ServerProject.DTOs;
 using ServerProject.Entities;
 using ServerProject.Repositories;
@@ -69,7 +70,9 @@ namespace ServerProject.Services
 		/// 電子郵件發送器實例，用於發送密碼重置等相關的電子郵件通知
 		/// </summary>
 		private readonly IEmailSender _emailSender;
-		
+
+
+		private readonly ILogger<AuthService> _logger;
 
 		public AuthService(
 			IConnectionFactory connectionFactory,
@@ -84,7 +87,8 @@ namespace ServerProject.Services
 			ITwoFactorOption twoFactorOption,
 			IPasswordValidator passwordValidator,
 			IPasswordResetTokenRepository passwordResetTokenRepository,
-			IEmailSender emailSender)
+			IEmailSender emailSender,
+			ILogger<AuthService> logger)
 			: base(connectionFactory)
 		{
 			// 初始化依賴的服務實例
@@ -100,6 +104,7 @@ namespace ServerProject.Services
 			_passwordValidator = passwordValidator;
 			_passwordResetTokenRepository = passwordResetTokenRepository;
 			_emailSender = emailSender;
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -107,12 +112,20 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">開始啟用雙重認證請求，包含用戶ID</param>
 		/// <returns>任務結果，包含受影響的行數</returns>
-		public async Task<BeginTwoFactorResultDto> BeginEnableTwoFactor(BeginEnableTwoFactorRequest request)
+		public Task<BeginTwoFactorResultDto> BeginEnableTwoFactor(BeginEnableTwoFactorRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(BeginEnableTwoFactor),
+				() => BeginEnableTwoFactorCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<BeginTwoFactorResultDto> BeginEnableTwoFactorCoreAsync(BeginEnableTwoFactorRequest request)
 		{
 			// 檢查請求是否為空或用戶ID是否小於等於0，如果是，則返回用戶未找到的錯誤DTO
 			if (request == null || request.CustomerId <= 0)
 			{
-				return BeginTwoFactorResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound,"User not found.");
+				return BeginTwoFactorResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound, "User not found.");
 			}
 
 			var now = _timeProvider.Now();
@@ -158,13 +171,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(BeginEnableTwoFactor), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return BeginTwoFactorResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(BeginEnableTwoFactor), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return BeginTwoFactorResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to begin enabling two-factor authentication due to a database error.");
+				return BeginTwoFactorResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to begin enabling two-factor authentication due to a database error.");
 			}
 		}
 
@@ -173,30 +189,38 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">更改密碼請求，包含用戶ID、舊密碼和新密碼</param>
 		/// <returns>更改密碼結果DTO，包含操作結果和相關信息</returns>
-		public async Task<ChangePasswordResultDto> ChangePassword(ChangePasswordRequest request)
+		public Task<ChangePasswordResultDto> ChangePassword(ChangePasswordRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(ChangePassword),
+				() => ChangePasswordCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<ChangePasswordResultDto> ChangePasswordCoreAsync(ChangePasswordRequest request)
 		{
 			// 檢查請求是否為空或用戶ID是否小於等於0，如果是，則返回用戶未找到的錯誤DTO
 			if (request == null || request.CustomerId <= 0)
 			{
-				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound,"User not found.");
+				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound, "User not found.");
 			}
 
 			// 檢查舊密碼是否為空或僅包含空白字符，如果是，則返回舊密碼為必填的錯誤DTO
 			if (string.IsNullOrWhiteSpace(request.OldPassword))
 			{
-				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordOldPasswordRequired,"Old password is required.");
+				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordOldPasswordRequired, "Old password is required.");
 			}
 
 			// 檢查新密碼是否為空或僅包含空白字符，如果是，則返回新密碼為必填的錯誤DTO
 			if (string.IsNullOrWhiteSpace(request.NewPassword))
 			{
-				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordRequired,"New password is required.");
+				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordRequired, "New password is required.");
 			}
 
 			// 檢查新密碼是否與舊密碼相同，如果是，則返回新密碼不能與舊密碼相同的錯誤DTO
 			if (string.Equals(request.OldPassword, request.NewPassword, StringComparison.Ordinal))
 			{
-				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld,"New password cannot be the same as the old password.");
+				return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld, "New password cannot be the same as the old password.");
 			}
 
 			// 使用密碼驗證器檢查新密碼是否符合安全規範，如果不符合，則返回新密碼策略無效的錯誤DTO
@@ -223,23 +247,23 @@ namespace ServerProject.Services
 				// 如果找不到對應的用戶認證信息，則返回用戶未找到的錯誤DTO
 				if (auth == null)
 				{
-					return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound,"User not found.");
+					return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound, "User not found.");
 				}
 
 				// 比较舊密碼的哈希值與數據庫中存儲的哈希值是否匹配，如果不匹配，則返回舊密碼無效的錯誤DTO
 				if (!_cryptoRepository.Verify(auth.PasswordHash, request.OldPassword))
 				{
-					return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordOldPasswordInvalid,"Old password is invalid.");
+					return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordOldPasswordInvalid, "Old password is invalid.");
 				}
 
 				// 比較新密碼的哈希值與數據庫中存儲的哈希值是否匹配，如果匹配，則返回新密碼不能與舊密碼相同的錯誤DTO
 				if (_cryptoRepository.Verify(auth.PasswordHash, request.NewPassword))
 				{
-					return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld,"New password cannot be the same as the old password.");
+					return ChangePasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld, "New password cannot be the same as the old password.");
 				}
 
 				// 生成新密碼的哈希值，以便在數據庫中更新用戶認證信息
-				var newPasswordHash = _cryptoRepository.Hash(request.NewPassword,HashProfile.UserPassword);
+				var newPasswordHash = _cryptoRepository.Hash(request.NewPassword, HashProfile.UserPassword);
 				var now = _timeProvider.Now();
 
 				// 在一個事務中執行以下操作：
@@ -282,13 +306,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(ChangePassword), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return ChangePasswordResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(ChangePassword), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return ChangePasswordResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to change password due to a database error.");
+				return ChangePasswordResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to change password due to a database error.");
 			}
 		}
 
@@ -297,18 +324,26 @@ namespace ServerProject.Services
 		/// </summary> 
 		/// <param name="request">確認重置密碼請求，包含用戶ID、重置令牌和新密碼</param>
 		/// <returns>確認重置密碼結果DTO，包含操作結果和相關信息</returns>
-		public async Task<ConfirmResetPasswordResultDto> ConfirmResetPassword(ConfirmResetPasswordRequest request)
+		public Task<ConfirmResetPasswordResultDto> ConfirmResetPassword(ConfirmResetPasswordRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(ConfirmResetPassword),
+				() => ConfirmResetPasswordCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<ConfirmResetPasswordResultDto> ConfirmResetPasswordCoreAsync(ConfirmResetPasswordRequest request)
 		{
 			// 檢查輸入的重置令牌是否為空或僅包含空白字符，如果是，則返回錯誤DTO
 			if (request == null || string.IsNullOrWhiteSpace(request.ResetToken))
 			{
-				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenRequired,"Reset token is required.");
+				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenRequired, "Reset token is required.");
 			}
 
 			// 檢查輸入的新密碼是否為空或僅包含空白字符，如果是，則返回錯誤DTO
 			if (string.IsNullOrWhiteSpace(request.NewPassword))
 			{
-				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordNewPasswordRequired,"New password is required.");
+				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordNewPasswordRequired, "New password is required.");
 			}
 
 			var now = _timeProvider.Now();
@@ -318,7 +353,7 @@ namespace ServerProject.Services
 			if (!passwordValidation.IsValid)
 			{
 				// 如果新密碼不符合安全規範，則返回錯誤DTO
-				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordNewPasswordPolicyInvalid,passwordValidation.Message);
+				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordNewPasswordPolicyInvalid, passwordValidation.Message);
 			}
 
 			// 使用 JWT 提供者生成重置令牌的哈希值，以便在數據庫中查找對應的重置令牌記錄
@@ -339,19 +374,19 @@ namespace ServerProject.Services
 				// 如果找不到對應的重置令牌記錄，則返回錯誤DTO
 				if (resetToken == null)
 				{
-					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenInvalid,"Invalid reset token.");
+					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenInvalid, "Invalid reset token.");
 				}
 
 				// 如果重置令牌已經被使用，則返回錯誤DTO
 				if (resetToken.UsedAt != null)
 				{
-					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenInvalid,"Reset token has already been used.");
+					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenInvalid, "Reset token has already been used.");
 				}
 
 				// 如果重置令牌已經過期，則返回錯誤DTO
 				if (resetToken.ExpiresAt < now)
 				{
-					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenExpired,"Reset token has expired.");
+					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordTokenExpired, "Reset token has expired.");
 				}
 
 				// 根據重置令牌的用戶ID從數據庫中查找對應的用戶認證信息
@@ -367,17 +402,17 @@ namespace ServerProject.Services
 				// 如果找不到對應的用戶認證信息，或者該用戶已被刪除，則返回錯誤DTO
 				if (auth == null || auth.IsDeleted)
 				{
-					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordUserNotFound,"User not found.");
+					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ConfirmResetPasswordUserNotFound, "User not found.");
 				}
 
 				// 如果新密碼與舊密碼相同，則返回錯誤DTO
 				if (_cryptoRepository.Verify(auth.PasswordHash, request.NewPassword))
 				{
-					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld,"New password cannot be the same as the old password.");
+					return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld, "New password cannot be the same as the old password.");
 				}
 
 				// 生成新密碼的哈希值，以便在數據庫中更新用戶認證信息
-				var newPasswordHash = _cryptoRepository.Hash(request.NewPassword,HashProfile.UserPassword);
+				var newPasswordHash = _cryptoRepository.Hash(request.NewPassword, HashProfile.UserPassword);
 
 				// 在一個事務中執行以下操作：
 				return await ExecuteInTxAsync<ConfirmResetPasswordResultDto>(
@@ -433,13 +468,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(ConfirmResetPassword), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return ConfirmResetPasswordResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(ConfirmResetPassword), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to confirm reset password due to a database error.");
+				return ConfirmResetPasswordResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to confirm reset password due to a database error.");
 			}
 		}
 
@@ -448,18 +486,26 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">確認啟用雙重認證請求，包含用戶ID和雙重認證代碼</param>
 		/// <returns>任務結果，包含受影響的行數</returns>
-		public async Task<ConfirmEnableTwoFactorResultDto> ConfirmEnableTwoFactor(ConfirmEnableTwoFactorRequest request)
+		public Task<ConfirmEnableTwoFactorResultDto> ConfirmEnableTwoFactor(ConfirmEnableTwoFactorRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(ConfirmEnableTwoFactor),
+				() => ConfirmEnableTwoFactorCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<ConfirmEnableTwoFactorResultDto> ConfirmEnableTwoFactorCoreAsync(ConfirmEnableTwoFactorRequest request)
 		{
 			// 檢查請求是否為空或用戶ID是否小於等於0，如果是，則返回用戶未找到的錯誤DTO
 			if (request == null || request.CustomerId <= 0)
 			{
-				return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound,"User not found.");
+				return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.ChangePasswordUserNotFound, "User not found.");
 			}
 
 			// 檢查雙重認證代碼是否為空或僅包含空白字符，如果是，則返回無效的雙重認證代碼的錯誤DTO
 			if (string.IsNullOrWhiteSpace(request.TwoFactorCode))
 			{
-				return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid,"Invalid two-factor authentication code.");
+				return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid, "Invalid two-factor authentication code.");
 			}
 
 			var now = _timeProvider.Now();
@@ -479,7 +525,7 @@ namespace ServerProject.Services
 				// 如果找不到對應的用戶認證信息，則返回無效的雙重認證確認狀態的錯誤DTO
 				if (auth == null)
 				{
-					return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorConfirmInvalidState,"Authentication record not found.");
+					return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorConfirmInvalidState, "Authentication record not found.");
 				}
 
 				// 檢查用戶認證信息的雙重認證狀態是否為待確認，密鑰是否存在，以及待確認過期時間是否有效，如果不符合條件，則返回無效的雙重認證確認狀態的錯誤DTO
@@ -488,7 +534,7 @@ namespace ServerProject.Services
 					auth.TwoFactorPendingExpiresAt == null ||
 					auth.TwoFactorPendingExpiresAt < now)
 				{
-					return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorConfirmInvalidState,"Invalid state for confirming two-factor authentication.");
+					return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorConfirmInvalidState, "Invalid state for confirming two-factor authentication.");
 				}
 
 				// 使用 Totp 驗證用戶輸入的雙重認證代碼是否有效
@@ -500,7 +546,7 @@ namespace ServerProject.Services
 				// 如果驗證失敗，則返回無效的雙重認證代碼的錯誤DTO
 				if (!codeIsValid)
 				{
-					return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorConfirmCodeInvalid,"Invalid two-factor authentication code.");
+					return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorConfirmCodeInvalid, "Invalid two-factor authentication code.");
 				}
 
 				// 在一個事務中執行以下操作：
@@ -512,8 +558,8 @@ namespace ServerProject.Services
 						// 更新用戶認證信息中的雙重認證狀態為啟用，並清除待確認過期時間，以完成雙重認證的啟用操作
 						var updatedRows = await _customerAuthRepository.ConfirmEnableTwoFactor(
 							request.CustomerId,
-	                        auth.TwoFactorSecret!,
-	                        now);
+							auth.TwoFactorSecret!,
+							now);
 
 						// 如果更新用戶認證信息的操作未成功（返回的受影響行數不等於1），則拋出異常
 						if (updatedRows != 1)
@@ -530,13 +576,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(ConfirmEnableTwoFactor), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return ConfirmEnableTwoFactorResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(ConfirmEnableTwoFactor), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to confirm enabling two-factor authentication due to a database error.");
+				return ConfirmEnableTwoFactorResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to confirm enabling two-factor authentication due to a database error.");
 			}
 		}
 
@@ -545,18 +594,26 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">禁用雙重認證請求，包含用戶ID和雙重認證代碼</param>
 		/// <returns>任務結果，包含操作結果和相關信息</returns>
-		public async Task<DisableTwoFactorResultDto> DisableTwoFactor(DisableTwoFactorRequest request)
+		public Task<DisableTwoFactorResultDto> DisableTwoFactor(DisableTwoFactorRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(DisableTwoFactor),
+				() => DisableTwoFactorCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<DisableTwoFactorResultDto> DisableTwoFactorCoreAsync(DisableTwoFactorRequest request)
 		{
 			// 檢查請求是否為空或用戶ID是否小於等於0，如果是，則返回用戶未找到的錯誤DTO
 			if (request == null || request.CustomerId <= 0)
 			{
-				return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorUserNotFound,"User not found.");
+				return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorUserNotFound, "User not found.");
 			}
 
 			// 檢查雙重認證代碼是否為空或僅包含空白字符，如果是，則返回無效的雙重認證代碼的錯誤DTO
 			if (string.IsNullOrWhiteSpace(request.TwoFactorCode))
 			{
-				return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid,"Invalid two-factor authentication code.");
+				return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid, "Invalid two-factor authentication code.");
 			}
 
 			try
@@ -574,19 +631,19 @@ namespace ServerProject.Services
 				// 如果找不到對應的用戶認證信息，則返回用戶未找到的錯誤DTO
 				if (auth == null)
 				{
-					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorUserNotFound,"User not found.");
+					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorUserNotFound, "User not found.");
 				}
 
 				// 如果雙重認證未啟用，則返回無效的雙重認證狀態的錯誤DTO
 				if (auth.TwoFactorStatus != (short)TwoFactorStatus.Enabled)
 				{
-					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorInvalidState,"Two-factor authentication is not enabled.");
+					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorInvalidState, "Two-factor authentication is not enabled.");
 				}
 
 				// 如果雙重認證的 secret 為空，則返回無效的雙重認證狀態的錯誤DTO
 				if (string.IsNullOrEmpty(auth.TwoFactorSecret))
 				{
-					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorInvalidState,"Two-factor authentication secret is missing.");
+					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.DisableTwoFactorInvalidState, "Two-factor authentication secret is missing.");
 				}
 
 				var now = _timeProvider.Now();
@@ -600,7 +657,7 @@ namespace ServerProject.Services
 				// 如果驗證失敗，則返回無效的雙重認證代碼的錯誤DTO
 				if (!codeIsValid)
 				{
-					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid,"Invalid two-factor authentication code.");
+					return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid, "Invalid two-factor authentication code.");
 				}
 
 				// 在一個事務中執行以下操作：
@@ -641,13 +698,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(DisableTwoFactor), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return DisableTwoFactorResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(DisableTwoFactor), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to disable two-factor authentication due to a database error.");
+				return DisableTwoFactorResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to disable two-factor authentication due to a database error.");
 			}
 		}
 
@@ -656,12 +716,20 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="loginRequest">登錄模型</param>
 		/// <returns>登錄結果DTO</returns>
-		public async Task<LoginResultDto> Login(LoginRequest loginRequest)
+		public Task<LoginResultDto> Login(LoginRequest loginRequest)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(Login),
+				() => LoginCoreAsync(loginRequest),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<LoginResultDto> LoginCoreAsync(LoginRequest loginRequest)
 		{
 			// 檢查登錄請求是否為空，或者登錄ID或密碼是否為空或僅包含空白字符，如果是，則返回登錄ID和密碼為必填的錯誤DTO
 			if (loginRequest == null || string.IsNullOrWhiteSpace(loginRequest.LoginId) || string.IsNullOrWhiteSpace(loginRequest.Password))
 			{
-				return LoginResultDto.Fail((int)AuthErrorCode.LoginIdOrPasswordRequired,"Login ID and password are required.");
+				return LoginResultDto.Fail((int)AuthErrorCode.LoginIdOrPasswordRequired, "Login ID and password are required.");
 			}
 
 			var now = _timeProvider.Now();
@@ -680,13 +748,13 @@ namespace ServerProject.Services
 				// 如果找不到對應的用戶認證信息，則返回登錄ID無效的錯誤DTO
 				if (auth == null)
 				{
-					return LoginResultDto.Fail((int)AuthErrorCode.LoginIdNotFound,"Invalid login ID.");
+					return LoginResultDto.Fail((int)AuthErrorCode.LoginIdNotFound, "Invalid login ID.");
 				}
 
 				// 如果用戶帳號已被鎖定，則返回帳號已鎖定的錯誤DTO
 				if (auth.LockedUntil > _timeProvider.Now())
 				{
-					return LoginResultDto.Fail((int)AuthErrorCode.AccountLocked,"Account is locked.");
+					return LoginResultDto.Fail((int)AuthErrorCode.AccountLocked, "Account is locked.");
 				}
 
 				// 比较輸入的密碼與數據庫中存儲的密碼哈希值是否匹配，如果不匹配，則進行失敗計數和鎖定處理
@@ -708,7 +776,8 @@ namespace ServerProject.Services
 						// 如果密码验证失败但是锁定操作未成功（返回的受影响行数为0），则返回锁定账户失败的错误DTO
 						if (lockedRows == 0)
 						{
-							return LoginResultDto.Fail((int)AuthErrorCode.LockAccountFailed,"Failed to lock account after multiple failed login attempts.");
+							_logger.LogError("{Operation} could not lock the account. ErrorCode={ErrorCode}",nameof(Login),(int)AuthErrorCode.LockAccountFailed);
+							return LoginResultDto.Fail((int)AuthErrorCode.LockAccountFailed, "Failed to lock account after multiple failed login attempts.");
 						}
 					}
 					else
@@ -726,12 +795,13 @@ namespace ServerProject.Services
 						// 如果更新失敗計數的操作未成功（返回的受影響行數為0），則返回更新失敗計數失敗的錯誤DTO
 						if (updatedRows == 0)
 						{
-							return LoginResultDto.Fail((int)AuthErrorCode.FailedCountUpdateFailed,"Failed to update failed login attempt count.");
+							_logger.LogError("{Operation} could not update the failed login count. ErrorCode={ErrorCode}",nameof(Login),(int)AuthErrorCode.FailedCountUpdateFailed);
+							return LoginResultDto.Fail((int)AuthErrorCode.FailedCountUpdateFailed, "Failed to update failed login attempt count.");
 						}
 					}
 
 					// 返回密碼無效的錯誤DTO
-					return LoginResultDto.Fail((int)AuthErrorCode.PasswordInvalid,"Invalid password.");
+					return LoginResultDto.Fail((int)AuthErrorCode.PasswordInvalid, "Invalid password.");
 				}
 
 				// 如果密碼驗證成功，則重置失敗計數和鎖定狀態
@@ -752,7 +822,7 @@ namespace ServerProject.Services
 					// 如果驗證失敗，則返回無效的雙重認證代碼的錯誤DTO
 					if (!codeIsValid)
 					{
-						return LoginResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid,"Invalid two-factor authentication code.");
+						return LoginResultDto.Fail((int)AuthErrorCode.TwoFactorCodeInvalid, "Invalid two-factor authentication code.");
 					}
 				}
 
@@ -775,10 +845,10 @@ namespace ServerProject.Services
 									// 创建新的会话
 									var sessionId = await _customerSessionRepository.CreateSession(
 										auth.CustomerId,
-	                                    loginRequest.Device,
-	                                    loginRequest.Ip,
-	                                    now,
-	                                    expiresAt);
+										loginRequest.Device,
+										loginRequest.Ip,
+										now,
+										expiresAt);
 
 									// 如果创建会话失败（返回的会话ID为null或空），则抛出异常
 									if (sessionId == null || sessionId == Guid.Empty)
@@ -833,18 +903,21 @@ namespace ServerProject.Services
 
 					// 如果认证类型无效，则返回无效的认证类型的错误DTO
 					default:
-						return LoginResultDto.Fail((int)AuthErrorCode.AuthTypeInvalid,"Invalid authentication type.");
+						return LoginResultDto.Fail((int)AuthErrorCode.AuthTypeInvalid, "Invalid authentication type.");
 				}
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(Login), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return LoginResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(Login), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return LoginResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Login failed due to a database error.");
+				return LoginResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Login failed due to a database error.");
 			}
 		}
 
@@ -853,12 +926,20 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">登出請求，包含用戶ID</param>
 		/// <returns>取消的会话或令牌数量，null表示用户不存在</returns>
-		public async Task<LogoutResultDto> Logout(LogoutRequest request)
+		public Task<LogoutResultDto> Logout(LogoutRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(Logout),
+				() => LogoutCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<LogoutResultDto> LogoutCoreAsync(LogoutRequest request)
 		{
 			// 檢查請求是否為空或用戶ID是否小於等於0，如果是，則返回用戶未找到的錯誤DTO
 			if (request == null || request.CustomerId <= 0)
 			{
-				return LogoutResultDto.Fail((int)AuthErrorCode.LogoutUserNotFound,"User not found.");
+				return LogoutResultDto.Fail((int)AuthErrorCode.LogoutUserNotFound, "User not found.");
 			}
 
 			try
@@ -876,7 +957,7 @@ namespace ServerProject.Services
 				// 如果找不到對應的用戶認證信息或是用户认证信息已被删除，則返回用戶未找到的錯誤DTO
 				if (auth == null || auth.IsDeleted)
 				{
-					return LogoutResultDto.Fail((int)AuthErrorCode.LogoutUserNotFound,"User not found.");
+					return LogoutResultDto.Fail((int)AuthErrorCode.LogoutUserNotFound, "User not found.");
 				}
 
 				var now = _timeProvider.Now();
@@ -904,13 +985,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(Logout), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return LogoutResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(Logout), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return LogoutResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to logout due to a database error.");
+				return LogoutResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to logout due to a database error.");
 			}
 		}
 
@@ -919,12 +1003,20 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">登出當前設備請求，包含用戶ID和當前設備的識別信息（如會話ID或刷新令牌）</param>
 		/// <returns>任务结果DTO，包含操作结果和相關信息</returns>
-		public async Task<LogoutCurrentDeviceResultDto> LogoutCurrentDevice(LogoutCurrentDeviceRequest request)
+		public Task<LogoutCurrentDeviceResultDto> LogoutCurrentDevice(LogoutCurrentDeviceRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(LogoutCurrentDevice),
+				() => LogoutCurrentDeviceCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<LogoutCurrentDeviceResultDto> LogoutCurrentDeviceCoreAsync(LogoutCurrentDeviceRequest request)
 		{
 			// 檢查請求是否為空或用戶ID是否小於等於0，如果是，則返回用戶未找到的錯誤DTO
 			if (request == null || request.CustomerId <= 0)
 			{
-				return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.LogoutUserNotFound,"User not found.");
+				return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.LogoutUserNotFound, "User not found.");
 			}
 
 			var now = _timeProvider.Now();
@@ -938,7 +1030,7 @@ namespace ServerProject.Services
 							// 如果使用的是 Session 類型的認證，則檢查請求中是否包含有效的會話ID，如果無效，則返回會話未找到的錯誤DTO
 							if (request.SessionId is not Guid sessionId || sessionId == Guid.Empty)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionNotFound,"Invalid session ID.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionNotFound, "Invalid session ID.");
 							}
 
 							// 根據會話ID從數據庫中查找對應的會話實體
@@ -953,19 +1045,19 @@ namespace ServerProject.Services
 							// 如果找不到對應的會話實體，則返回會話未找到的錯誤DTO
 							if (session == null)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionNotFound,"Session not found.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionNotFound, "Session not found.");
 							}
 
 							// 如果會話不屬於請求中的用戶ID，則返回會話無效的錯誤DTO
 							if (session.UserId != request.CustomerId)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionInvalid,"Session does not belong to the user.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionInvalid, "Session does not belong to the user.");
 							}
 
 							// 如果會話已經無效，則返回會話已經無效的錯誤DTO
 							if (!session.IsValid)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionInvalid,"Session is already invalid.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.SessionInvalid, "Session is already invalid.");
 							}
 
 							// 在一個事務中執行以下操作：
@@ -997,7 +1089,7 @@ namespace ServerProject.Services
 							// 如果使用的是 JWT 類型的認證，則檢查請求中是否包含有效的刷新令牌，如果無效，則返回刷新令牌無效的錯誤DTO
 							if (string.IsNullOrWhiteSpace(request.RefreshToken))
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenInvalid,"Invalid refresh token.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenInvalid, "Invalid refresh token.");
 							}
 
 							// 生成刷新令牌的哈希值，以便在數據庫中查找對應的刷新令牌實體
@@ -1016,25 +1108,25 @@ namespace ServerProject.Services
 							// 如果找不到對應的刷新令牌實體，則返回刷新令牌未找到的錯誤DTO
 							if (refreshToken == null)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenNotFound,"Refresh token not found.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenNotFound, "Refresh token not found.");
 							}
 
 							// 如果刷新令牌不屬於請求中的用戶ID，則返回刷新令牌無效的錯誤DTO
 							if (refreshToken.UserId != request.CustomerId)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenInvalid,"Refresh token does not belong to the user.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenInvalid, "Refresh token does not belong to the user.");
 							}
 
 							// 如果刷新令牌已經被撤銷，則返回刷新令牌已經被撤銷的錯誤DTO
 							if (refreshToken.RevokedAt != null)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenRevoked,"Refresh token is already revoked.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenRevoked, "Refresh token is already revoked.");
 							}
 
 							// 如果刷新令牌已經過期，則返回刷新令牌已經過期的錯誤DTO
 							if (refreshToken.ExpiresAt < now)
 							{
-								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenExpired,"Refresh token has expired.");
+								return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.RefreshTokenExpired, "Refresh token has expired.");
 							}
 
 							// 在一個事務中執行以下操作：
@@ -1070,13 +1162,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(LogoutCurrentDevice), (int)ex.ErrorCode);
 				// 如果在執行操作時發生自定義的身份驗證操作異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return LogoutCurrentDeviceResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(LogoutCurrentDevice), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，包含無法操作資料庫的錯誤代碼和消息
-				return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to logout current device due to a database error.");
+				return LogoutCurrentDeviceResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to logout current device due to a database error.");
 			}
 		}
 
@@ -1085,12 +1180,20 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">刷新令牌请求，包含刷新令牌字符串</param>
 		/// <returns>刷新结果DTO，包含新的访问令牌和刷新令牌</returns>
-		public async Task<RefreshTokenDto> RefreshToken(RefreshTokenRequest request)
+		public Task<RefreshTokenDto> RefreshToken(RefreshTokenRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(RefreshToken),
+				() => RefreshTokenCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<RefreshTokenDto> RefreshTokenCoreAsync(RefreshTokenRequest request)
 		{
 			// 驗證輸入的刷新令牌是否為空或僅包含空白字符，如果是，則返回錯誤DTO
 			if (request == null || string.IsNullOrWhiteSpace(request.RefreshToken))
 			{
-				return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenInvalid,"Invalid refresh token.");
+				return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenInvalid, "Invalid refresh token.");
 			}
 
 			var now = _timeProvider.Now();
@@ -1113,7 +1216,7 @@ namespace ServerProject.Services
 				// 驗證刷新令牌實體是否存在，如果不存在，則返回錯誤DTO
 				if (refreshToken == null)
 				{
-					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenNotFound,"Refresh token not found.");
+					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenNotFound, "Refresh token not found.");
 				}
 
 				// 验证刷新令牌是否已经过期，如果已经过期，则撤销该刷新令牌并返回错误DTO
@@ -1131,13 +1234,13 @@ namespace ServerProject.Services
 						"RevokeExpiredRefreshToken");
 
 					// 返回刷新令牌过期的错误DTO
-					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenExpired,"Refresh token has expired.");
+					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenExpired, "Refresh token has expired.");
 				}
 
 				// 验证刷新令牌是否已经被撤销，如果已经被撤销，则返回错误DTO
 				if (refreshToken.RevokedAt != null)
 				{
-					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenRevoked,"Refresh token has been revoked.");
+					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenRevoked, "Refresh token has been revoked.");
 				}
 
 				// 根据刷新令牌的用户ID从数据库中获取对应的用户认证信息
@@ -1153,25 +1256,25 @@ namespace ServerProject.Services
 				// 验证用户认证信息是否存在，如果不存在，则返回错误DTO
 				if (auth == null)
 				{
-					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenUserNotFound,"User not found for the refresh token.");
+					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenUserNotFound, "User not found for the refresh token.");
 				}
 
 				// 验证用户账户是否已被删除，如果已被删除，则返回错误DTO
 				if (auth.IsDeleted)
 				{
-					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenAuthInvalid,"User account has been deleted.");
+					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenAuthInvalid, "User account has been deleted.");
 				}
 
 				// 验证用户认证信息的认证类型是否为JWT，如果不是，则返回错误DTO
 				if (auth.AuthType != (short)AuthType.JWT)
 				{
-					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenAuthInvalid,"Invalid authentication type for the refresh token.");
+					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenAuthInvalid, "Invalid authentication type for the refresh token.");
 				}
 
 				// 验证刷新令牌的版本是否与用户认证信息的版本匹配，如果不匹配，则返回错误DTO
 				if (auth.TokenVersion != refreshToken.TokenVersion)
 				{
-					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenTokenVersionMismatch,"Token version mismatch. The refresh token is no longer valid due to password change or other security events.");
+					return RefreshTokenDto.Fail((int)AuthErrorCode.RefreshTokenTokenVersionMismatch, "Token version mismatch. The refresh token is no longer valid due to password change or other security events.");
 				}
 
 				// 生成新的访问令牌和刷新令牌
@@ -1199,7 +1302,7 @@ namespace ServerProject.Services
 						// 验证撤销操作是否成功，如果不成功，则抛出异常
 						if (revokedRows != 1)
 						{
-							throw new AuthOperationException(AuthErrorCode.RefreshTokenRotationFailed,"Failed to rotate refresh token.");
+							throw new AuthOperationException(AuthErrorCode.RefreshTokenRotationFailed, "Failed to rotate refresh token.");
 						}
 
 						// 存储新的刷新令牌
@@ -1215,7 +1318,7 @@ namespace ServerProject.Services
 						// 验证存储操作是否成功，如果不成功，则抛出异常
 						if (newTokenId == null || newTokenId == Guid.Empty)
 						{
-							throw new AuthOperationException(AuthErrorCode.RefreshTokenRotationFailed,"Failed to rotate refresh token.");
+							throw new AuthOperationException(AuthErrorCode.RefreshTokenRotationFailed, "Failed to rotate refresh token.");
 						}
 
 						// 返回成功的刷新令牌DTO，包含新的访问令牌和刷新令牌
@@ -1225,13 +1328,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(RefreshToken), (int)ex.ErrorCode);
 				// 如果在刷新令牌操作中发生自定义异常，则返回错误DTO，包含异常的错误代码和消息
 				return RefreshTokenDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(RefreshToken), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在执行数据库操作时发生异常，则返回错误DTO，表示无法操作数据库
-				return RefreshTokenDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to refresh token due to a database error.");
+				return RefreshTokenDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to refresh token due to a database error.");
 			}
 		}
 
@@ -1240,12 +1346,22 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">重置密碼請求，包含用戶ID和ip地址或是装置信息</param>
 		/// <returns>重置密碼結果DTO，包含操作結果和相關信息</returns>
-		public async Task<ResetPasswordResultDto> ResetPassword(ResetPasswordRequest request)
+		public Task<ResetPasswordResultDto> ResetPassword(ResetPasswordRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(ResetPassword),
+				() => ResetPasswordCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<ResetPasswordResultDto> ResetPasswordCoreAsync(ResetPasswordRequest request)
 		{
 			// 驗證輸入的請求是否為空或登錄ID是否為空白，如果是，則返回錯誤DTO
 			if (request == null || string.IsNullOrWhiteSpace(request.LoginId))
 			{
-				return ResetPasswordResultDto.Fail((int)AuthErrorCode.ResetPasswordLoginIdRequired,"Login ID is required.");
+				return ResetPasswordResultDto.Fail(
+					(int)AuthErrorCode.ResetPasswordLoginIdRequired,
+					"Login ID is required.");
 			}
 
 			// 成功消息的常量字符串，用於在操作成功時返回給用戶
@@ -1266,6 +1382,10 @@ namespace ServerProject.Services
 				// 如果用戶認證信息不存在或已被刪除，則返回成功DTO，避免洩露用戶是否存在的信息
 				if (auth == null || auth.IsDeleted)
 				{
+					_logger.LogDebug(
+						"{Operation} completed without submitting a reset email.",
+						nameof(ResetPassword));
+
 					return ResetPasswordResultDto.SuccessDto(successMessage);
 				}
 
@@ -1281,12 +1401,17 @@ namespace ServerProject.Services
 				// 如果用戶信息不存在或電子郵件為空，則返回成功DTO，避免洩露用戶是否存在的信息
 				if (customer == null || string.IsNullOrWhiteSpace(customer.Email))
 				{
+					_logger.LogDebug(
+						"{Operation} completed without submitting a reset email.",
+						nameof(ResetPassword));
+
 					return ResetPasswordResultDto.SuccessDto(successMessage);
 				}
 
 				// 生成新的密碼重置令牌及其哈希值
 				var passwordResetToken = _jwtProvider.CreatePasswordResetToken();
-				var passwordResetTokenHash = _jwtProvider.CreatePasswordResetTokenHash(passwordResetToken);
+				var passwordResetTokenHash =
+					_jwtProvider.CreatePasswordResetTokenHash(passwordResetToken);
 
 				// 計算令牌的過期時間
 				var now = _timeProvider.Now();
@@ -1315,7 +1440,9 @@ namespace ServerProject.Services
 						// 驗證存儲操作是否成功，如果不成功，則拋出異常
 						if (tokenId == null || tokenId == Guid.Empty)
 						{
-							throw new AuthOperationException(AuthErrorCode.ResetPasswordFailed,"Failed to generate password reset token.");
+							throw new AuthOperationException(
+								AuthErrorCode.ResetPasswordFailed,
+								"Failed to generate password reset token.");
 						}
 					},
 					"StorePasswordResetToken");
@@ -1323,40 +1450,70 @@ namespace ServerProject.Services
 				try
 				{
 					// 發送密碼重置電子郵件給用戶
-					await _emailSender.SendResetPasswordEmailAsync(customer.Email,passwordResetToken,expiresAt);
+					await _emailSender.SendResetPasswordEmailAsync(
+						customer.Email,
+						passwordResetToken,
+						expiresAt);
 				}
 				catch (Exception)
 				{
+					_logger.LogError(
+						"{Operation} could not send the reset email. ErrorCode={ErrorCode}",
+						nameof(ResetPassword),
+						(int)AuthErrorCode.ResetPasswordFailed);
+
 					// 如果發送電子郵件失敗，則返回錯誤DTO
-					return ResetPasswordResultDto.Fail((int)AuthErrorCode.ResetPasswordFailed,"Failed to send password reset email.");
+					return ResetPasswordResultDto.Fail(
+						(int)AuthErrorCode.ResetPasswordFailed,
+						"Failed to send password reset email.");
 				}
+
+				_logger.LogInformation(
+					"{Operation} submitted a reset email successfully.",
+					nameof(ResetPassword));
 
 				// 返回成功DTO，告知用戶已發送密碼重置電子郵件
 				return ResetPasswordResultDto.SuccessDto(successMessage);
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(ResetPassword), (int)ex.ErrorCode);
+
 				// 如果在重置密碼操作中發生自定義異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return ResetPasswordResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError(
+					"{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(ResetPassword),
+					(int)AuthErrorCode.UnableToOperateDb);
+
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，表示無法操作資料庫
-				return ResetPasswordResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to reset password due to a database error.");
+				return ResetPasswordResultDto.Fail(
+					(int)AuthErrorCode.UnableToOperateDb,
+					"Failed to reset password due to a database error.");
 			}
 		}
-
 		/// <summary>
 		/// 更新會話的最後活動時間
 		/// </summary>
 		/// <param name="request">更新會話請求，包含會話ID</param>
 		/// <returns>true:有效/false:无效</returns>
-		public async Task<TouchSessionResultDto> TouchSession(TouchSessionRequest request)
+		public Task<TouchSessionResultDto> TouchSession(TouchSessionRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(TouchSession),
+				() => TouchSessionCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<TouchSessionResultDto> TouchSessionCoreAsync(TouchSessionRequest request)
 		{
 			// 驗證輸入的請求是否為空或會話ID是否為空，如果是，則返回錯誤DTO
 			if (request == null || request.SessionId == Guid.Empty)
 			{
-				return TouchSessionResultDto.Fail((int)AuthErrorCode.SessionTouchRejected,"Failed to touch session.");
+				return TouchSessionResultDto.Fail((int)AuthErrorCode.SessionTouchRejected, "Failed to touch session.");
 			}
 
 			// 計算新的過期時間，將當前時間加上配置的閒置超時值
@@ -1373,9 +1530,9 @@ namespace ServerProject.Services
 						// 更新會話的最後活動時間和過期時間
 						var affectedRows = await _customerSessionRepository.Touch(
 							request.SessionId,
-	                        now,
-	                        _sessionOption.IdleTimeout,
-	                        _sessionOption.AbsoluteLifetime);
+							now,
+							_sessionOption.IdleTimeout,
+							_sessionOption.AbsoluteLifetime);
 
 						// 驗證更新操作是否成功，如果不成功，則拋出異常
 						if (affectedRows != 1)
@@ -1392,13 +1549,16 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(TouchSession), (int)ex.ErrorCode);
 				// 如果在更新會話操作中發生自定義異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return TouchSessionResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(TouchSession), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，表示無法操作資料庫
-				return TouchSessionResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to touch session due to a database error.");
+				return TouchSessionResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to touch session due to a database error.");
 			}
 		}
 
@@ -1407,18 +1567,26 @@ namespace ServerProject.Services
 		/// </summary>
 		/// <param name="request">更新認證類型請求，包含用戶ID和新的認證類型</param>
 		/// <returns>更新認證類型結果DTO，包含操作結果和相關信息</returns>
-		public async Task<UpdateAuthTypeResultDto> UpdateAuthType(UpdateAuthTypeRequest request)
+		public Task<UpdateAuthTypeResultDto> UpdateAuthType(UpdateAuthTypeRequest request)
+		{
+			return ExecuteWithLoggingAsync(
+				nameof(UpdateAuthType),
+				() => UpdateAuthTypeCoreAsync(request),
+				result => (result.Success, result.Code));
+		}
+
+		private async Task<UpdateAuthTypeResultDto> UpdateAuthTypeCoreAsync(UpdateAuthTypeRequest request)
 		{
 			// 驗證輸入的請求是否為空或用戶ID是否有效，如果是，則返回錯誤DTO
 			if (request == null || request.CustomerId <= 0)
 			{
-				return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.UpdateAuthTypeUserNotFound,"User not found.");
+				return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.UpdateAuthTypeUserNotFound, "User not found.");
 			}
 
 			// 驗證輸入的認證類型是否有效，如果無效，則返回錯誤DTO
 			if (!Enum.IsDefined(typeof(AuthType), request.AuthType))
 			{
-				return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.AuthTypeInvalid,"Invalid authentication type.");
+				return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.AuthTypeInvalid, "Invalid authentication type.");
 			}
 
 			try
@@ -1436,7 +1604,7 @@ namespace ServerProject.Services
 				// 驗證用戶認證信息是否存在，如果不存在，則返回錯誤DTO
 				if (auth == null)
 				{
-					return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.UpdateAuthTypeUserNotFound,"User not found.");
+					return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.UpdateAuthTypeUserNotFound, "User not found.");
 				}
 
 				// 驗證用戶認證信息的認證類型是否已經是新的認證類型，如果是，則返回成功DTO
@@ -1487,15 +1655,92 @@ namespace ServerProject.Services
 			}
 			catch (AuthOperationException ex)
 			{
+				LogCaughtAuthFailure(nameof(UpdateAuthType), (int)ex.ErrorCode);
 				// 如果在更新認證類型操作中發生自定義異常，則返回錯誤DTO，包含異常的錯誤代碼和消息
 				return UpdateAuthTypeResultDto.Fail((int)ex.ErrorCode, ex.Message);
 			}
 			catch (UnableToOperateDBException)
 			{
+				_logger.LogError("{Operation} encountered a database error. ErrorCode={ErrorCode}",
+					nameof(UpdateAuthType), (int)AuthErrorCode.UnableToOperateDb);
 				// 如果在執行資料庫操作時發生異常，則返回錯誤DTO，表示無法操作資料庫
-				return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.UnableToOperateDb,"Failed to update authentication type due to a database error.");
+				return UpdateAuthTypeResultDto.Fail((int)AuthErrorCode.UnableToOperateDb, "Failed to update authentication type due to a database error.");
 			}
 		}
+		/// <summary>
+		/// 根据认证错误码区分系统故障和业务拒绝。
+		/// </summary>
+		private static LogOutcome GetFailureOutcome(int errorCode)
+		{
+			return errorCode switch
+			{
+				(int)AuthErrorCode.UnableToOperateDb
+					or (int)AuthErrorCode.ChangePasswordTransactionFailed
+					or (int)AuthErrorCode.ConfirmResetPasswordFailed
+					or (int)AuthErrorCode.TwoFactorBeginFailed
+					or (int)AuthErrorCode.TwoFactorConfirmUpdateFailed
+					or (int)AuthErrorCode.DisableTwoFactorFailed
+					or (int)AuthErrorCode.LockAccountFailed
+					or (int)AuthErrorCode.FailedCountUpdateFailed
+					or (int)AuthErrorCode.CreateSessionFailed
+					or (int)AuthErrorCode.CreateRefreshTokenFailed
+					or (int)AuthErrorCode.RefreshTokenRotationFailed
+					or (int)AuthErrorCode.ResetPasswordFailed
+					or (int)AuthErrorCode.UpdateAuthTypeFailed => LogOutcome.Failed,
+				_ => LogOutcome.Rejected
+			};
+		}
+
+		/// <summary>
+		/// 记录已捕获的认证操作异常。
+		/// </summary>
+		private void LogCaughtAuthFailure(string operation, int errorCode)
+		{
+			var level = GetFailureOutcome(errorCode) == LogOutcome.Failed
+				? LogLevel.Error
+				: LogLevel.Debug;
+
+			_logger.Log(level, "{Operation} caught an authentication operation exception. ErrorCode={ErrorCode}",
+				operation, errorCode);
+		}
+
+		/// <summary>
+		/// 执行认证操作并记录开始、结束、耗时和结果。
+		/// </summary>
+		private async Task<TResult> ExecuteWithLoggingAsync<TResult>(
+			string operation,
+			Func<Task<TResult>> execute,
+			Func<TResult, (bool Success, int Code)> getResult)
+		{
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+			int? errorCode = null;
+
+			_logger.LogStart(operation: operation);
+
+			try
+			{
+				var result = await execute();
+				var (success, code) = getResult(result);
+
+				if (success)
+				{
+					outcome = LogOutcome.Completed;
+				}
+				else
+				{
+					errorCode = code;
+					outcome = GetFailureOutcome(code);
+				}
+
+				return result;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode, operation: operation);
+			}
+		}
+
 	}
 
 	public interface IAuthService

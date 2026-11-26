@@ -2,6 +2,7 @@
 using ServerProject.Common;
 using ServerProject.Entities;
 using ShareProject.Common;
+using System.Diagnostics;
 
 namespace ServerProject.Repositories
 {
@@ -10,8 +11,14 @@ namespace ServerProject.Repositories
     /// </summary>
     public class TransactionRepository : RepositoryBase, ITransactionRepository
     {
-		public TransactionRepository(IDataAccess dataAccess) : base(dataAccess)
-        {
+		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<TransactionRepository> _logger;
+
+		public TransactionRepository(IDataAccess dataAccess, ILogger<TransactionRepository> logger) : base(dataAccess)
+		{
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -21,8 +28,23 @@ namespace ServerProject.Repositories
 		/// <returns>交易模型</returns>
 		public async Task<TransactionEntity?> GetTransactionById(long transactionId)
         {
-            var sql = LoadSql("Transaction.GetTransactionById");
-            return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<TransactionEntity>(sql, new { TransactionId = transactionId }, _dataAccess.DbTransaction);
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Transaction.GetTransactionById");
+				var transaction = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<TransactionEntity>(sql, new { TransactionId = transactionId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return transaction;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -32,9 +54,23 @@ namespace ServerProject.Repositories
         /// <returns>新插入交易的ID</returns>
         public async Task<long> InsertTransaction(TransactionEntity transaction)
         {
-            var sql = LoadSql("Transaction.InsertTransaction");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.ExecuteScalarAsync<long>(sql, transaction, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Transaction.InsertTransaction");
+				var transacionId = await _dataAccess.DbConnection.ExecuteScalarAsync<long>(sql, transaction, _dataAccess.DbTransaction);
+
+				outcome = transacionId > 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return transacionId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
         /// <summary>
@@ -44,9 +80,23 @@ namespace ServerProject.Repositories
         /// <returns>交易金額變化</returns>
         public async Task<decimal> GetAmountDeltaByTransactionId(long transactionId)
         {
-            var sql = LoadSql("Transaction.GetAmountDeltaByTransactionId");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-            return await _dataAccess.DbConnection.ExecuteScalarAsync<decimal>(sql, new { TransactionId = transactionId }, _dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Transaction.GetAmountDeltaByTransactionId");
+				var amountDelta = await _dataAccess.DbConnection.ExecuteScalarAsync<decimal>(sql, new { TransactionId = transactionId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return amountDelta;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -57,9 +107,23 @@ namespace ServerProject.Repositories
 		/// <returns>交易模型</returns>
 		public async Task<TransactionEntity?> GetTransactionByIdAndAccountId(long transactionId, long accountId)
 		{
-			var sql = LoadSql("Transaction.GetTransactionByIdAndAccountId");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<TransactionEntity>(sql,new{TransactionId = transactionId,AccountId = accountId},_dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Transaction.GetTransactionByIdAndAccountId");
+				var transaction = await _dataAccess.DbConnection.QuerySingleOrDefaultAsync<TransactionEntity>(sql, new { TransactionId = transactionId, AccountId = accountId }, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return transaction;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -73,11 +137,23 @@ namespace ServerProject.Repositories
 		/// <returns>交易模型组成的表</returns>
 		public async Task<List<TransactionEntity>> GetTransactionsByAccountId(long accountId, DateTime? from, DateTime? to, TransactionType? transactionType, TransactionStatus? status)
 		{
-			var sql = LoadSql("Transaction.GetTransactionsByAccountId");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			var transactions = await _dataAccess.DbConnection.QueryAsync<TransactionEntity>(sql,new{AccountId = accountId,From = from,To = to,TransactionType = transactionType,Status = status},_dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
 
-			return transactions.ToList();
+			try
+			{
+				var sql = LoadSql("Transaction.GetTransactionsByAccountId");
+				var transactions = (await _dataAccess.DbConnection.QueryAsync<TransactionEntity>(sql, new { AccountId = accountId, From = from, To = to, TransactionType = transactionType, Status = status }, _dataAccess.DbTransaction)).AsList();
+
+				outcome = LogOutcome.Completed;
+				return transactions;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -87,11 +163,23 @@ namespace ServerProject.Repositories
 		/// <returns>交易模型组成的表</returns>
 		public async Task<List<TransactionEntity>> GetTransactionsByGroupId(Guid groupId)
 		{
-			var sql = LoadSql("Transaction.GetTransactionsByGroupId");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			var transactions = await _dataAccess.DbConnection.QueryAsync<TransactionEntity>(sql,new{GroupId = groupId},_dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
 
-			return transactions.ToList();
+			try
+			{
+				var sql = LoadSql("Transaction.GetTransactionsByGroupId");
+				var transactions = (await _dataAccess.DbConnection.QueryAsync<TransactionEntity>(sql, new { GroupId = groupId }, _dataAccess.DbTransaction)).AsList();
+
+				outcome = LogOutcome.Completed;
+				return transactions;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 	}
 

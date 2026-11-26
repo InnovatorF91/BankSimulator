@@ -2,6 +2,7 @@
 using ServerProject.Common;
 using ServerProject.Entities;
 using ShareProject.Common;
+using System.Diagnostics;
 
 namespace ServerProject.Repositories
 {
@@ -10,8 +11,15 @@ namespace ServerProject.Repositories
     /// </summary>
     public class AccountRepository : RepositoryBase, IAccountRepository
     {
-		public AccountRepository(IDataAccess dataAccess) : base(dataAccess)
+		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<AccountRepository> _logger;
+
+		public AccountRepository(IDataAccess dataAccess,
+			ILogger<AccountRepository> logger) : base(dataAccess)
 		{
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -23,13 +31,28 @@ namespace ServerProject.Repositories
 		/// <param name="updatedAt">更新时刻</param>
 		public async Task<int> DecreaseBalanceIfEnoughBalance(long accountId, decimal amount, DateTime updatedAt)
 		{
-			var sql = LoadSql("Account.DecreaseBalanceIfEnoughBalance");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId,
-				Amount = amount,
-				UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.DecreaseBalanceIfEnoughBalance");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					AccountId = accountId,
+					Amount = amount,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -39,12 +62,27 @@ namespace ServerProject.Repositories
 		/// <param name="currency">币种</param>
 		public async Task<bool> ExistsNotClosedAccountByCustomerIdAndCurrency(int customerId, string currency)
 		{
-			var sql = LoadSql("Account.ExistsActiveAccountByCustomerIdAndCurrency");
-			return await _dataAccess.DbConnection.ExecuteScalarAsync<bool>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = customerId,
-				Currency = currency
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.ExistsActiveAccountByCustomerIdAndCurrency");
+				var isExist = await _dataAccess.DbConnection.ExecuteScalarAsync<bool>(sql, new
+				{
+					CustomerId = customerId,
+					Currency = currency
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return isExist;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -54,11 +92,26 @@ namespace ServerProject.Repositories
 		/// <param name="accountId">账户ID</param>
 		public async Task<AccountEntity?> GetAccountById(long accountId)
 		{
-			var sql = LoadSql("Account.GetAccountById");
-			return await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.GetAccountById");
+				var account = await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+				{
+					AccountId = accountId
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return account;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -69,12 +122,27 @@ namespace ServerProject.Repositories
 		/// <param name="customerId">客户ID</param>
 		public async Task<AccountEntity?> GetAccountByIdAndCustomerId(long accountId, int customerId)
 		{
-			var sql = LoadSql("Account.GetAccountByIdAndCustomerId");
-			return await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId,
-				CustomerId = customerId
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.GetAccountByIdAndCustomerId");
+				var account = await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+				{
+					AccountId = accountId,
+					CustomerId = customerId
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return account;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -84,12 +152,27 @@ namespace ServerProject.Repositories
 		/// <param name="customerId">客户ID</param>
 		public async Task<AccountEntity?> GetAccountByIdAndCustomerIdForUpdate(long accountId, int customerId)
 		{
-			var sql = LoadSql("Account.GetAccountByIdAndCustomerIdForUpdate");
-			return await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId,
-				CustomerId = customerId
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.GetAccountByIdAndCustomerIdForUpdate");
+				var account = await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+				{
+					AccountId = accountId,
+					CustomerId = customerId
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return account;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -98,11 +181,26 @@ namespace ServerProject.Repositories
 		/// <param name="accountId">账户ID</param>
 		public async Task<AccountEntity?> GetAccountByIdForUpdate(long accountId)
 		{
-			var sql = LoadSql("Account.GetAccountByIdForUpdate");
-			return await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.GetAccountByIdForUpdate");
+				var account = await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountEntity>(sql, new
+				{
+					AccountId = accountId
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return account;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome,stopwatch.ElapsedMilliseconds,level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -112,12 +210,26 @@ namespace ServerProject.Repositories
 		/// <returns>账户操作日志记录</returns>
 		public async Task<AccountOperationLogEntity?> GetAccountOperationLogById(long operationLogId)
 		{
-			var sql = LoadSql("Account.GetAccountOperationLogById");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountOperationLogEntity>(sql,new
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				OperationLogId = operationLogId
-			},_dataAccess.DbTransaction);
+				var sql = LoadSql("Account.GetAccountOperationLogById");
+				var operationLog = await _dataAccess.DbConnection.QueryFirstOrDefaultAsync<AccountOperationLogEntity>(sql, new
+				{
+					OperationLogId = operationLogId
+				}, _dataAccess.DbTransaction);
+
+				outcome = LogOutcome.Completed;
+				return operationLog;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -127,12 +239,26 @@ namespace ServerProject.Repositories
 		/// <returns>所有相关的账户操作日志记录</returns>
 		public async Task<List<AccountOperationLogEntity>> GetAccountOperationLogsByAccountId(long accountId)
 		{
-			var sql = LoadSql("Account.GetAccountOperationLogsByAccountId");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return (await _dataAccess.DbConnection.QueryAsync<AccountOperationLogEntity>(sql,new
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId
-			},_dataAccess.DbTransaction)).AsList();
+				var sql = LoadSql("Account.GetAccountOperationLogsByAccountId");
+				var operationLogs = (await _dataAccess.DbConnection.QueryAsync<AccountOperationLogEntity>(sql, new
+				{
+					AccountId = accountId
+				}, _dataAccess.DbTransaction)).AsList();
+
+				outcome = LogOutcome.Completed;
+				return operationLogs;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -142,11 +268,26 @@ namespace ServerProject.Repositories
 		/// <param name="customerId">客户ID</param> 
 		public async Task<List<AccountEntity>> GetAllAccountsByCustomerId(int customerId)
 		{
-			var sql = LoadSql("Account.GetAllAccountsByCustomerId");
-			return (await _dataAccess.DbConnection.QueryAsync<AccountEntity>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = customerId
-			}, _dataAccess.DbTransaction)).AsList();
+				var sql = LoadSql("Account.GetAllAccountsByCustomerId");
+				var accounts = (await _dataAccess.DbConnection.QueryAsync<AccountEntity>(sql, new
+				{
+					CustomerId = customerId
+				}, _dataAccess.DbTransaction)).AsList();
+
+				outcome = LogOutcome.Completed;
+				return accounts;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -155,11 +296,26 @@ namespace ServerProject.Repositories
 		/// <param name="customerId">客户ID</param>
 		public async Task<List<AccountEntity>> GetNonClosedAccountsByCustomerId(int customerId)
 		{
-			var sql = LoadSql("Account.GetNonClosedAccountsByCustomerId");
-			return (await _dataAccess.DbConnection.QueryAsync<AccountEntity>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = customerId
-			}, _dataAccess.DbTransaction)).AsList();
+				var sql = LoadSql("Account.GetNonClosedAccountsByCustomerId");
+				var accounts = (await _dataAccess.DbConnection.QueryAsync<AccountEntity>(sql, new
+				{
+					CustomerId = customerId
+				}, _dataAccess.DbTransaction)).AsList();
+
+				outcome = LogOutcome.Completed;
+				return accounts;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -171,13 +327,28 @@ namespace ServerProject.Repositories
 		/// <param name="updatedAt">更新时刻</param>
 		public async Task<int> IncreaseBalance(long accountId, decimal amount, DateTime updatedAt)
 		{
-			var sql = LoadSql("Account.IncreaseBalance");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId,
-				Amount = amount,
-				UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.IncreaseBalance");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					AccountId = accountId,
+					Amount = amount,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -186,18 +357,33 @@ namespace ServerProject.Repositories
 		/// <param name="account">账户实体对象，AccountId 属性会被忽略</param>
 		public async Task<long> InsertAccount(AccountEntity account)
 		{
-			var sql = LoadSql("Account.InsertAccount");
-			return await _dataAccess.DbConnection.ExecuteScalarAsync<long>(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				CustomerId = account.CustomerId,
-				AccountType = account.AccountType,
-				Balance = account.Balance,
-				Currency = account.Currency,
-				Status = account.Status,
-				OpenDate = account.OpenDate,
-				CloseDate = account.CloseDate,
-				UpdateDate = account.UpdateDate
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.InsertAccount");
+				var accountId = await _dataAccess.DbConnection.ExecuteScalarAsync<long>(sql, new
+				{
+					CustomerId = account.CustomerId,
+					AccountType = account.AccountType,
+					Balance = account.Balance,
+					Currency = account.Currency,
+					Status = account.Status,
+					OpenDate = account.OpenDate,
+					CloseDate = account.CloseDate,
+					UpdateDate = account.UpdateDate
+				}, _dataAccess.DbTransaction);
+
+				outcome = accountId > 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return accountId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -207,22 +393,36 @@ namespace ServerProject.Repositories
 		/// <returns>操作日志ID</returns>
 		public async Task<long> InsertAccountOperationLog(AccountOperationLogEntity accountOperationLog)
 		{
-			var sql = LoadSql("Account.InsertAccountOperationLog");
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
 
-			return await _dataAccess.DbConnection.ExecuteScalarAsync<long>(
-				sql,
-				new
-				{
-					AccountId = accountOperationLog.AccountId,
-					CustomerId = accountOperationLog.CustomerId,
-					OperationType = (short)accountOperationLog.OperationType,
-					OldStatus = accountOperationLog.OldStatus.HasValue ? (short?)accountOperationLog.OldStatus.Value : null,
-					NewStatus = accountOperationLog.NewStatus.HasValue ? (short?)accountOperationLog.NewStatus.Value : null,
-					Reason = accountOperationLog.Reason,
-					OperatedBy = accountOperationLog.OperatedBy,
-					OperatedAt = accountOperationLog.OperatedAt
-				},
-				_dataAccess.DbTransaction);
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
+			{
+				var sql = LoadSql("Account.InsertAccountOperationLog");
+				var operationLogId = await _dataAccess.DbConnection.ExecuteScalarAsync<long>(
+					sql,
+					new
+					{
+						AccountId = accountOperationLog.AccountId,
+						CustomerId = accountOperationLog.CustomerId,
+						OperationType = (short)accountOperationLog.OperationType,
+						OldStatus = accountOperationLog.OldStatus.HasValue ? (short?)accountOperationLog.OldStatus.Value : null,
+						NewStatus = accountOperationLog.NewStatus.HasValue ? (short?)accountOperationLog.NewStatus.Value : null,
+						Reason = accountOperationLog.Reason,
+						OperatedBy = accountOperationLog.OperatedBy,
+						OperatedAt = accountOperationLog.OperatedAt
+					},
+					_dataAccess.DbTransaction);
+
+				outcome = operationLogId > 0 ? LogOutcome.Completed : LogOutcome.Failed;
+				return operationLogId;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -233,13 +433,28 @@ namespace ServerProject.Repositories
 		/// <param name="updatedAt">更新时刻</param>
 		public async Task<int> UpdateAccountStatus(long accountId, AccountStatus newStatus, DateTime updatedAt)
 		{
-			var sql = LoadSql("Account.UpdateAccountStatus");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId,
-				NewStatus = newStatus,
-				UpdatedAt = updatedAt
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.UpdateAccountStatus");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					AccountId = accountId,
+					NewStatus = newStatus,
+					UpdatedAt = updatedAt
+				}, _dataAccess.DbTransaction);
+
+				outcome = count == 1 ? LogOutcome.Completed : LogOutcome.Failed;
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 
 		/// <summary>
@@ -254,16 +469,37 @@ namespace ServerProject.Repositories
 		/// <param name="requireZeroBalance">是否要求账户余额为零</param>
 		public async Task<int> UpdateAccountStatusIfCurrentStatus(long accountId,int customerId ,AccountStatus currentStatus, AccountStatus newStatus, DateTime updatedAt, bool requireZeroBalance)
 		{
-			var sql = LoadSql("Account.UpdateAccountStatusIfCurrentStatus");
-			return await _dataAccess.DbConnection.ExecuteAsync(sql, new
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+
+			_logger.LogStart(level: LogLevel.Debug);
+
+			try
 			{
-				AccountId = accountId,
-				CustomerId = customerId,
-				CurrentStatus = currentStatus,
-				NewStatus = newStatus,
-				UpdatedAt = updatedAt,
-				RequireZeroBalance = requireZeroBalance
-			}, _dataAccess.DbTransaction);
+				var sql = LoadSql("Account.UpdateAccountStatusIfCurrentStatus");
+				var count = await _dataAccess.DbConnection.ExecuteAsync(sql, new
+				{
+					AccountId = accountId,
+					CustomerId = customerId,
+					CurrentStatus = currentStatus,
+					NewStatus = newStatus,
+					UpdatedAt = updatedAt,
+					RequireZeroBalance = requireZeroBalance
+				}, _dataAccess.DbTransaction);
+
+				outcome = count switch
+				{
+					1 => LogOutcome.Completed,
+					0 => LogOutcome.Rejected,
+					_ => LogOutcome.Failed
+				};
+
+				return count;
+			}
+			finally
+			{
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, level: LogLevel.Debug);
+			}
 		}
 	}
 

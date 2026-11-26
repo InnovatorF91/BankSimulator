@@ -1,5 +1,7 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System.Diagnostics;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ServerProject.Common;
 using ServerProject.Services;
 using ShareProject.Common;
 using ShareProject.Request;
@@ -11,11 +13,17 @@ namespace ServerProject.Controllers
 	[Route("api/auth")]
 	public class AuthController : ControllerBase
 	{
-		private readonly IAuthService _authService;
+		private const string InternalErrorMessage = "An internal server error occurred.";
+		private const string ValidSessionRequiredMessage = "A valid session is required.";
+		private const string SessionOnlyMessage = "This endpoint only supports session authentication.";
 
-		public AuthController(IAuthService authService)
+		private readonly IAuthService _authService;
+		private readonly ILogger<AuthController> _logger;
+
+		public AuthController(IAuthService authService, ILogger<AuthController> logger)
 		{
 			_authService = authService;
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -24,74 +32,67 @@ namespace ServerProject.Controllers
 		[AllowAnonymous]
 		[HttpPost("Login")]
 		[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-		public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request)
+		public Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request)
 		{
-			if (request.Type != AuthType.Session)
+			return ExecuteWithLoggingAsync<LoginResponse>(nameof(Login), async () =>
 			{
-				return BadRequest(new ErrorResponse
+				if (request.Type != AuthType.Session)
 				{
-					Success = false,
-					Code = (int)AuthErrorCode.AuthTypeInvalid,
-					Message = "This endpoint only supports session authentication."
-				});
-			}
-
-			var result = await _authService.Login(request);
-
-			if (!result.Success)
-			{
-				var code = result.Code;
-				var (statusCode, message) = code switch
-				{
-					(int)AuthErrorCode.LoginIdOrPasswordRequired
-						or (int)AuthErrorCode.AuthTypeInvalid
-						=> (StatusCodes.Status400BadRequest, result.Message ?? string.Empty),
-
-					(int)AuthErrorCode.LoginIdNotFound
-						or (int)AuthErrorCode.PasswordInvalid
-						or (int)AuthErrorCode.AccountLocked
-						=> (StatusCodes.Status401Unauthorized, "Invalid login ID or password."),
-
-					(int)AuthErrorCode.TwoFactorRequired
-						or (int)AuthErrorCode.TwoFactorCodeInvalid
-						=> (StatusCodes.Status401Unauthorized, result.Message ?? string.Empty),
-
-					_ => (StatusCodes.Status500InternalServerError,
-						"An internal server error occurred.")
-				};
-
-				if (code is (int)AuthErrorCode.LoginIdNotFound
-					or (int)AuthErrorCode.AccountLocked)
-				{
-					code = (int)AuthErrorCode.PasswordInvalid;
+					return CreateErrorResult<LoginResponse>(
+						StatusCodes.Status400BadRequest,
+						(int)AuthErrorCode.AuthTypeInvalid,
+						SessionOnlyMessage);
 				}
 
-				return StatusCode(statusCode, new ErrorResponse
+				var result = await _authService.Login(request);
+
+				if (!result.Success)
 				{
-					Success = false,
-					Code = code,
-					Message = message
-				});
-			}
-
-			if (result.SessionId is not Guid sessionId || sessionId == Guid.Empty)
-			{
-				return StatusCode(
-					StatusCodes.Status500InternalServerError,
-					new ErrorResponse
+					var code = result.Code;
+					var (statusCode, message) = code switch
 					{
-						Success = false,
-						Code = (int)AuthErrorCode.CreateSessionFailed,
-						Message = "An internal server error occurred."
-					});
-			}
+						(int)AuthErrorCode.LoginIdOrPasswordRequired
+							or (int)AuthErrorCode.AuthTypeInvalid
+							=> (StatusCodes.Status400BadRequest, result.Message ?? string.Empty),
 
-			return Ok(new LoginResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "Login succeeded.",
-				SessionId = sessionId
+						(int)AuthErrorCode.LoginIdNotFound
+							or (int)AuthErrorCode.PasswordInvalid
+							or (int)AuthErrorCode.AccountLocked
+							=> (StatusCodes.Status401Unauthorized, "Invalid login ID or password."),
+
+						(int)AuthErrorCode.TwoFactorRequired
+							or (int)AuthErrorCode.TwoFactorCodeInvalid
+							=> (StatusCodes.Status401Unauthorized, result.Message ?? string.Empty),
+
+						_ => (StatusCodes.Status500InternalServerError, InternalErrorMessage)
+					};
+
+					if (code is (int)AuthErrorCode.LoginIdNotFound
+						or (int)AuthErrorCode.AccountLocked)
+					{
+						code = (int)AuthErrorCode.PasswordInvalid;
+					}
+
+					return CreateErrorResult<LoginResponse>(statusCode, code, message);
+				}
+
+				if (result.SessionId is not Guid sessionId || sessionId == Guid.Empty)
+				{
+					return CreateErrorResult<LoginResponse>(
+						StatusCodes.Status500InternalServerError,
+						(int)AuthErrorCode.CreateSessionFailed,
+						InternalErrorMessage);
+				}
+
+				var response = new LoginResponse
+				{
+					Success = true,
+					Code = result.Code,
+					Message = "Login succeeded.",
+					SessionId = sessionId
+				};
+
+				return (Ok(response), LogOutcome.Completed, null);
 			});
 		}
 
@@ -99,111 +100,91 @@ namespace ServerProject.Controllers
 		/// 注销当前设备的会话。
 		/// </summary>
 		[HttpPost("LogoutCurrentDevice")]
-		public async Task<ActionResult<LogoutCurrentDeviceResponse>> LogoutCurrentDevice()
+		public Task<ActionResult<LogoutCurrentDeviceResponse>> LogoutCurrentDevice()
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !int.TryParse(User.FindFirst("uid")?.Value, out var customerId)
-				|| customerId <= 0
-				|| !Guid.TryParse(User.FindFirst("session_id")?.Value, out var sessionId)
-				|| sessionId == Guid.Empty)
-			{
-				return Unauthorized(new ErrorResponse
+			return ExecuteWithLoggingAsync<LogoutCurrentDeviceResponse>(
+				nameof(LogoutCurrentDevice),
+				async () =>
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
-				});
-			}
-
-			var result = await _authService.LogoutCurrentDevice(
-				new LogoutCurrentDeviceRequest
-				{
-					CustomerId = customerId,
-					AuthType = AuthType.Session,
-					SessionId = sessionId
-				});
-
-			if (!result.Success)
-			{
-				if (result.Code is (int)AuthErrorCode.SessionNotFound
-					or (int)AuthErrorCode.SessionInvalid)
-				{
-					return Unauthorized(new ErrorResponse
+					if (!TryGetSessionCustomerId(out var customerId)
+						|| !Guid.TryParse(User.FindFirst("session_id")?.Value, out var sessionId)
+						|| sessionId == Guid.Empty)
 					{
-						Success = false,
-						Code = (int)CustomerErrorCode.UnauthorizedAccess,
-						Message = "A valid session is required."
-					});
-				}
+						return CreateInvalidSessionResult<LogoutCurrentDeviceResponse>();
+					}
 
-				return StatusCode(
-					StatusCodes.Status500InternalServerError,
-					new ErrorResponse
+					var result = await _authService.LogoutCurrentDevice(
+						new LogoutCurrentDeviceRequest
+						{
+							CustomerId = customerId,
+							AuthType = AuthType.Session,
+							SessionId = sessionId
+						});
+
+					if (!result.Success)
 					{
-						Success = false,
+						if (result.Code is (int)AuthErrorCode.SessionNotFound
+							or (int)AuthErrorCode.SessionInvalid)
+						{
+							return CreateInvalidSessionResult<LogoutCurrentDeviceResponse>();
+						}
+
+						return CreateErrorResult<LogoutCurrentDeviceResponse>(
+							StatusCodes.Status500InternalServerError,
+							result.Code,
+							InternalErrorMessage);
+					}
+
+					var response = new LogoutCurrentDeviceResponse
+					{
+						Success = true,
 						Code = result.Code,
-						Message = "An internal server error occurred."
-					});
-			}
+						Message = "The current session was logged out successfully."
+					};
 
-			return Ok(new LogoutCurrentDeviceResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "The current session was logged out successfully."
-			});
+					return (Ok(response), LogOutcome.Completed, null);
+				});
 		}
 
 		/// <summary>
 		/// 登出当前客户，撤销其认证类型对应的凭据。
 		/// </summary>
 		[HttpPost("Logout")]
-		public async Task<ActionResult<LogoutResponse>> Logout()
+		public Task<ActionResult<LogoutResponse>> Logout()
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !int.TryParse(User.FindFirst("uid")?.Value, out var customerId)
-				|| customerId <= 0)
+			return ExecuteWithLoggingAsync<LogoutResponse>(nameof(Logout), async () =>
 			{
-				return Unauthorized(new ErrorResponse
+				if (!TryGetSessionCustomerId(out var customerId))
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
-				});
-			}
-
-			var result = await _authService.Logout(new LogoutRequest
-			{
-				CustomerId = customerId
-			});
-
-			if (!result.Success)
-			{
-				if (result.Code == (int)AuthErrorCode.LogoutUserNotFound)
-				{
-					return Unauthorized(new ErrorResponse
-					{
-						Success = false,
-						Code = (int)CustomerErrorCode.UnauthorizedAccess,
-						Message = "A valid session is required."
-					});
+					return CreateInvalidSessionResult<LogoutResponse>();
 				}
 
-				return StatusCode(
-					StatusCodes.Status500InternalServerError,
-					new ErrorResponse
-					{
-						Success = false,
-						Code = result.Code,
-						Message = "An internal server error occurred."
-					});
-			}
+				var result = await _authService.Logout(new LogoutRequest
+				{
+					CustomerId = customerId
+				});
 
-			return Ok(new LogoutResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "Logout succeeded."
+				if (!result.Success)
+				{
+					if (result.Code == (int)AuthErrorCode.LogoutUserNotFound)
+					{
+						return CreateInvalidSessionResult<LogoutResponse>();
+					}
+
+					return CreateErrorResult<LogoutResponse>(
+						StatusCodes.Status500InternalServerError,
+						result.Code,
+						InternalErrorMessage);
+				}
+
+				var response = new LogoutResponse
+				{
+					Success = true,
+					Code = result.Code,
+					Message = "Logout succeeded."
+				};
+
+				return (Ok(response), LogOutcome.Completed, null);
 			});
 		}
 
@@ -211,60 +192,55 @@ namespace ServerProject.Controllers
 		/// 修改当前客户的密码，并使现有会话失效。
 		/// </summary>
 		[HttpPost("ChangePassword")]
-		public async Task<ActionResult<ChangePasswordResponse>> ChangePassword([FromBody] ChangePasswordRequest request)
+		public Task<ActionResult<ChangePasswordResponse>> ChangePassword([FromBody] ChangePasswordRequest request)
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !int.TryParse(User.FindFirst("uid")?.Value, out var customerId)
-				|| customerId <= 0)
-			{
-				return Unauthorized(new ErrorResponse
+			return ExecuteWithLoggingAsync<ChangePasswordResponse>(
+				nameof(ChangePassword),
+				async () =>
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
+					if (!TryGetSessionCustomerId(out var customerId))
+					{
+						return CreateInvalidSessionResult<ChangePasswordResponse>();
+					}
+
+					request.CustomerId = customerId;
+					var result = await _authService.ChangePassword(request);
+
+					if (!result.Success)
+					{
+						var (statusCode, code, message) = result.Code switch
+						{
+							(int)AuthErrorCode.ChangePasswordOldPasswordRequired
+								or (int)AuthErrorCode.ChangePasswordOldPasswordInvalid
+								or (int)AuthErrorCode.ChangePasswordNewPasswordRequired
+								or (int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld
+								or (int)AuthErrorCode.ChangePasswordNewPasswordPolicyInvalid
+								=> (StatusCodes.Status400BadRequest,
+									result.Code,
+									result.Message ?? string.Empty),
+
+							(int)AuthErrorCode.ChangePasswordUserNotFound
+								=> (StatusCodes.Status401Unauthorized,
+									(int)CustomerErrorCode.UnauthorizedAccess,
+									ValidSessionRequiredMessage),
+
+							_ => (StatusCodes.Status500InternalServerError,
+								result.Code,
+								InternalErrorMessage)
+						};
+
+						return CreateErrorResult<ChangePasswordResponse>(statusCode, code, message);
+					}
+
+					var response = new ChangePasswordResponse
+					{
+						Success = true,
+						Code = result.Code,
+						Message = "The password was changed successfully. Please log in again."
+					};
+
+					return (Ok(response), LogOutcome.Completed, null);
 				});
-			}
-
-			request.CustomerId = customerId;
-			var result = await _authService.ChangePassword(request);
-
-			if (!result.Success)
-			{
-				var (statusCode, code, message) = result.Code switch
-				{
-					(int)AuthErrorCode.ChangePasswordOldPasswordRequired
-						or (int)AuthErrorCode.ChangePasswordOldPasswordInvalid
-						or (int)AuthErrorCode.ChangePasswordNewPasswordRequired
-						or (int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld
-						or (int)AuthErrorCode.ChangePasswordNewPasswordPolicyInvalid
-						=> (StatusCodes.Status400BadRequest,
-							result.Code,
-							result.Message ?? string.Empty),
-
-					(int)AuthErrorCode.ChangePasswordUserNotFound
-						=> (StatusCodes.Status401Unauthorized,
-							(int)CustomerErrorCode.UnauthorizedAccess,
-							"A valid session is required."),
-
-					_ => (StatusCodes.Status500InternalServerError,
-						result.Code,
-						"An internal server error occurred.")
-				};
-
-				return StatusCode(statusCode, new ErrorResponse
-				{
-					Success = false,
-					Code = code,
-					Message = message
-				});
-			}
-
-			return Ok(new ChangePasswordResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "The password was changed successfully. Please log in again."
-			});
 		}
 
 		/// <summary>
@@ -272,184 +248,166 @@ namespace ServerProject.Controllers
 		/// </summary>
 		[HttpPost("BeginEnableTwoFactor")]
 		[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-		public async Task<ActionResult<BeginEnableTwoFactorResponse>> BeginEnableTwoFactor()
+		public Task<ActionResult<BeginEnableTwoFactorResponse>> BeginEnableTwoFactor()
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !int.TryParse(User.FindFirst("uid")?.Value, out var customerId)
-				|| customerId <= 0)
-			{
-				return Unauthorized(new ErrorResponse
+			return ExecuteWithLoggingAsync<BeginEnableTwoFactorResponse>(
+				nameof(BeginEnableTwoFactor),
+				async () =>
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
-				});
-			}
-
-			var result = await _authService.BeginEnableTwoFactor(
-				new BeginEnableTwoFactorRequest
-				{
-					CustomerId = customerId
-				});
-
-			if (!result.Success)
-			{
-				var (statusCode, message) = result.Code switch
-				{
-					(int)AuthErrorCode.TwoFactorBeginFailed
-						=> (StatusCodes.Status409Conflict,
-							"Two-factor setup could not be started for the current account."),
-
-					_ => (StatusCodes.Status500InternalServerError,
-						"An internal server error occurred.")
-				};
-
-				return StatusCode(statusCode, new ErrorResponse
-				{
-					Success = false,
-					Code = result.Code,
-					Message = message
-				});
-			}
-
-			if (string.IsNullOrWhiteSpace(result.Secret)
-				|| result.ExpiresAt is not DateTime expiresAt
-				|| string.IsNullOrWhiteSpace(result.OtpauthUri))
-			{
-				return StatusCode(
-					StatusCodes.Status500InternalServerError,
-					new ErrorResponse
+					if (!TryGetSessionCustomerId(out var customerId))
 					{
-						Success = false,
-						Code = (int)AuthErrorCode.TwoFactorBeginFailed,
-						Message = "An internal server error occurred."
-					});
-			}
+						return CreateInvalidSessionResult<BeginEnableTwoFactorResponse>();
+					}
 
-			return Ok(new BeginEnableTwoFactorResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "Two-factor setup started. Confirm it with a code from your authenticator.",
-				Secret = result.Secret,
-				ExpiresAt = expiresAt,
-				OtpauthUri = result.OtpauthUri
-			});
+					var result = await _authService.BeginEnableTwoFactor(
+						new BeginEnableTwoFactorRequest
+						{
+							CustomerId = customerId
+						});
+
+					if (!result.Success)
+					{
+						var (statusCode, message) = result.Code switch
+						{
+							(int)AuthErrorCode.TwoFactorBeginFailed
+								=> (StatusCodes.Status409Conflict,
+									"Two-factor setup could not be started for the current account."),
+
+							_ => (StatusCodes.Status500InternalServerError, InternalErrorMessage)
+						};
+
+						return CreateErrorResult<BeginEnableTwoFactorResponse>(
+							statusCode, result.Code, message);
+					}
+
+					if (string.IsNullOrWhiteSpace(result.Secret)
+						|| result.ExpiresAt is not DateTime expiresAt
+						|| string.IsNullOrWhiteSpace(result.OtpauthUri))
+					{
+						return CreateErrorResult<BeginEnableTwoFactorResponse>(
+							StatusCodes.Status500InternalServerError,
+							(int)AuthErrorCode.TwoFactorBeginFailed,
+							InternalErrorMessage);
+					}
+
+					var response = new BeginEnableTwoFactorResponse
+					{
+						Success = true,
+						Code = result.Code,
+						Message = "Two-factor setup started. Confirm it with a code from your authenticator.",
+						Secret = result.Secret,
+						ExpiresAt = expiresAt,
+						OtpauthUri = result.OtpauthUri
+					};
+
+					return (Ok(response), LogOutcome.Completed, null);
+				});
 		}
 
 		/// <summary>
 		/// 验证当前客户的验证码并正式启用双因素认证。
 		/// </summary>
 		[HttpPost("ConfirmEnableTwoFactor")]
-		public async Task<ActionResult<ConfirmEnableTwoFactorResponse>> ConfirmEnableTwoFactor([FromBody] ConfirmEnableTwoFactorRequest request)
+		public Task<ActionResult<ConfirmEnableTwoFactorResponse>> ConfirmEnableTwoFactor([FromBody] ConfirmEnableTwoFactorRequest request)
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !int.TryParse(User.FindFirst("uid")?.Value, out var customerId)
-				|| customerId <= 0)
-			{
-				return Unauthorized(new ErrorResponse
+			return ExecuteWithLoggingAsync<ConfirmEnableTwoFactorResponse>(
+				nameof(ConfirmEnableTwoFactor),
+				async () =>
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
+					if (!TryGetSessionCustomerId(out var customerId))
+					{
+						return CreateInvalidSessionResult<ConfirmEnableTwoFactorResponse>();
+					}
+
+					request.CustomerId = customerId;
+					var result = await _authService.ConfirmEnableTwoFactor(request);
+
+					if (!result.Success)
+					{
+						var (statusCode, message) = result.Code switch
+						{
+							(int)AuthErrorCode.TwoFactorCodeInvalid
+								or (int)AuthErrorCode.TwoFactorConfirmCodeInvalid
+								=> (StatusCodes.Status400BadRequest,
+									"Invalid two-factor authentication code."),
+
+							(int)AuthErrorCode.TwoFactorConfirmInvalidState
+								=> (StatusCodes.Status409Conflict,
+									"There is no valid pending two-factor setup to confirm."),
+
+							_ => (StatusCodes.Status500InternalServerError, InternalErrorMessage)
+						};
+
+						return CreateErrorResult<ConfirmEnableTwoFactorResponse>(
+							statusCode, result.Code, message);
+					}
+
+					var response = new ConfirmEnableTwoFactorResponse
+					{
+						Success = true,
+						Code = result.Code,
+						Message = "Two-factor authentication was enabled successfully."
+					};
+
+					return (Ok(response), LogOutcome.Completed, null);
 				});
-			}
-
-			request.CustomerId = customerId;
-			var result = await _authService.ConfirmEnableTwoFactor(request);
-
-			if (!result.Success)
-			{
-				var (statusCode, message) = result.Code switch
-				{
-					(int)AuthErrorCode.TwoFactorCodeInvalid
-						or (int)AuthErrorCode.TwoFactorConfirmCodeInvalid
-						=> (StatusCodes.Status400BadRequest,
-							"Invalid two-factor authentication code."),
-
-					(int)AuthErrorCode.TwoFactorConfirmInvalidState
-						=> (StatusCodes.Status409Conflict,
-							"There is no valid pending two-factor setup to confirm."),
-
-					_ => (StatusCodes.Status500InternalServerError,
-						"An internal server error occurred.")
-				};
-
-				return StatusCode(statusCode, new ErrorResponse
-				{
-					Success = false,
-					Code = result.Code,
-					Message = message
-				});
-			}
-
-			return Ok(new ConfirmEnableTwoFactorResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "Two-factor authentication was enabled successfully."
-			});
 		}
 
 		/// <summary>
 		/// 验证当前验证码，关闭双因素认证并使现有会话失效。
 		/// </summary>
 		[HttpPost("DisableTwoFactor")]
-		public async Task<ActionResult<DisableTwoFactorResponse>> DisableTwoFactor([FromBody] DisableTwoFactorRequest request)
+		public Task<ActionResult<DisableTwoFactorResponse>> DisableTwoFactor([FromBody] DisableTwoFactorRequest request)
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !int.TryParse(User.FindFirst("uid")?.Value, out var customerId)
-				|| customerId <= 0)
-			{
-				return Unauthorized(new ErrorResponse
+			return ExecuteWithLoggingAsync<DisableTwoFactorResponse>(
+				nameof(DisableTwoFactor),
+				async () =>
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
+					if (!TryGetSessionCustomerId(out var customerId))
+					{
+						return CreateInvalidSessionResult<DisableTwoFactorResponse>();
+					}
+
+					request.CustomerId = customerId;
+					var result = await _authService.DisableTwoFactor(request);
+
+					if (!result.Success)
+					{
+						var (statusCode, code, message) = result.Code switch
+						{
+							(int)AuthErrorCode.TwoFactorCodeInvalid
+								=> (StatusCodes.Status400BadRequest,
+									result.Code,
+									"Invalid two-factor authentication code."),
+
+							(int)AuthErrorCode.DisableTwoFactorUserNotFound
+								=> (StatusCodes.Status401Unauthorized,
+									(int)CustomerErrorCode.UnauthorizedAccess,
+									ValidSessionRequiredMessage),
+
+							(int)AuthErrorCode.DisableTwoFactorInvalidState
+								=> (StatusCodes.Status409Conflict,
+									result.Code,
+									"Two-factor authentication cannot be disabled in its current state."),
+
+							_ => (StatusCodes.Status500InternalServerError,
+								result.Code,
+								InternalErrorMessage)
+						};
+
+						return CreateErrorResult<DisableTwoFactorResponse>(
+							statusCode, code, message);
+					}
+
+					var response = new DisableTwoFactorResponse
+					{
+						Success = true,
+						Code = result.Code,
+						Message = "Two-factor authentication was disabled successfully. Please log in again."
+					};
+
+					return (Ok(response), LogOutcome.Completed, null);
 				});
-			}
-
-			request.CustomerId = customerId;
-			var result = await _authService.DisableTwoFactor(request);
-
-			if (!result.Success)
-			{
-				var (statusCode, code, message) = result.Code switch
-				{
-					(int)AuthErrorCode.TwoFactorCodeInvalid
-						=> (StatusCodes.Status400BadRequest,
-							result.Code,
-							"Invalid two-factor authentication code."),
-
-					(int)AuthErrorCode.DisableTwoFactorUserNotFound
-						=> (StatusCodes.Status401Unauthorized,
-							(int)CustomerErrorCode.UnauthorizedAccess,
-							"A valid session is required."),
-
-					(int)AuthErrorCode.DisableTwoFactorInvalidState
-						=> (StatusCodes.Status409Conflict,
-							result.Code,
-							"Two-factor authentication cannot be disabled in its current state."),
-
-					_ => (StatusCodes.Status500InternalServerError,
-						result.Code,
-						"An internal server error occurred.")
-				};
-
-				return StatusCode(statusCode, new ErrorResponse
-				{
-					Success = false,
-					Code = code,
-					Message = message
-				});
-			}
-
-			return Ok(new DisableTwoFactorResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "Two-factor authentication was disabled successfully. Please log in again."
-			});
 		}
 
 		/// <summary>
@@ -459,41 +417,61 @@ namespace ServerProject.Controllers
 		[HttpPost("ResetPassword")]
 		public ActionResult<ResetPasswordResponse> ResetPassword([FromBody] ResetPasswordRequest request,[FromServices] PasswordResetQueue queue)
 		{
-			if (string.IsNullOrWhiteSpace(request.LoginId))
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+			int? errorCode = null;
+
+			_logger.LogStart();
+
+			try
 			{
-				return BadRequest(new ErrorResponse
+				if (string.IsNullOrWhiteSpace(request.LoginId))
 				{
-					Success = false,
-					Code = (int)AuthErrorCode.ResetPasswordLoginIdRequired,
-					Message = "Login ID is required."
-				});
+					var error = CreateErrorResult<ResetPasswordResponse>(
+						StatusCodes.Status400BadRequest,
+						(int)AuthErrorCode.ResetPasswordLoginIdRequired,
+						"Login ID is required.");
+
+					outcome = error.Outcome;
+					errorCode = error.ErrorCode;
+					return error.Response;
+				}
+
+				var queuedRequest = new ResetPasswordRequest
+				{
+					LoginId = request.LoginId,
+					Ip = HttpContext.Connection.RemoteIpAddress?.ToString(),
+					Device = Request.Headers["User-Agent"].FirstOrDefault()
+				};
+
+				if (!queue.TryEnqueue(queuedRequest))
+				{
+					var error = CreateErrorResult<ResetPasswordResponse>(
+						StatusCodes.Status503ServiceUnavailable,
+						(int)AuthErrorCode.ResetPasswordFailed,
+						"Password reset is temporarily unavailable. Please try again later.");
+
+					outcome = error.Outcome;
+					errorCode = error.ErrorCode;
+					return error.Response;
+				}
+
+				var response = new ResetPasswordResponse
+				{
+					Success = true,
+					Code = 0,
+					Message = "If the account exists, a password reset email will be sent."
+				};
+
+				// 当前请求在入队后结束，邮件由后台 Worker 发送。
+				outcome = LogOutcome.Completed;
+				return Ok(response);
 			}
-
-			var queuedRequest = new ResetPasswordRequest
+			finally
 			{
-				LoginId = request.LoginId,
-				Ip = HttpContext.Connection.RemoteIpAddress?.ToString(),
-				Device = Request.Headers["User-Agent"].FirstOrDefault()
-			};
-
-			if (!queue.TryEnqueue(queuedRequest))
-			{
-				return StatusCode(
-					StatusCodes.Status503ServiceUnavailable,
-					new ErrorResponse
-					{
-						Success = false,
-						Code = (int)AuthErrorCode.ResetPasswordFailed,
-						Message = "Password reset is temporarily unavailable. Please try again later."
-					});
+				stopwatch.Stop();
+				_logger.LogEnd(outcome, stopwatch.ElapsedMilliseconds, errorCode);
 			}
-
-			return Ok(new ResetPasswordResponse
-			{
-				Success = true,
-				Code = 0,
-				Message = "If the account exists, a password reset email will be sent."
-			});
 		}
 
 		/// <summary>
@@ -501,100 +479,94 @@ namespace ServerProject.Controllers
 		/// </summary>
 		[AllowAnonymous]
 		[HttpPost("ConfirmResetPassword")]
-		public async Task<ActionResult<ConfirmResetPasswordResponse>> ConfirmResetPassword([FromBody] ConfirmResetPasswordRequest request)
+		public Task<ActionResult<ConfirmResetPasswordResponse>> ConfirmResetPassword([FromBody] ConfirmResetPasswordRequest request)
 		{
-			var result = await _authService.ConfirmResetPassword(request);
-
-			if (!result.Success)
-			{
-				var (statusCode, code, message) = result.Code switch
+			return ExecuteWithLoggingAsync<ConfirmResetPasswordResponse>(
+				nameof(ConfirmResetPassword),
+				async () =>
 				{
-					(int)AuthErrorCode.ConfirmResetPasswordTokenRequired
-						or (int)AuthErrorCode.ConfirmResetPasswordNewPasswordRequired
-						or (int)AuthErrorCode.ConfirmResetPasswordNewPasswordPolicyInvalid
-						or (int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld
-						=> (StatusCodes.Status400BadRequest,
-							result.Code,
-							result.Message ?? string.Empty),
+					var result = await _authService.ConfirmResetPassword(request);
 
-					(int)AuthErrorCode.ConfirmResetPasswordTokenInvalid
-						or (int)AuthErrorCode.ConfirmResetPasswordTokenExpired
-						or (int)AuthErrorCode.ConfirmResetPasswordUserNotFound
-						=> (StatusCodes.Status400BadRequest,
-							(int)AuthErrorCode.ConfirmResetPasswordTokenInvalid,
-							"The password reset token is invalid or has expired."),
+					if (!result.Success)
+					{
+						var (statusCode, code, message) = result.Code switch
+						{
+							(int)AuthErrorCode.ConfirmResetPasswordTokenRequired
+								or (int)AuthErrorCode.ConfirmResetPasswordNewPasswordRequired
+								or (int)AuthErrorCode.ConfirmResetPasswordNewPasswordPolicyInvalid
+								or (int)AuthErrorCode.ChangePasswordNewPasswordSameAsOld
+								=> (StatusCodes.Status400BadRequest,
+									result.Code,
+									result.Message ?? string.Empty),
 
-					_ => (StatusCodes.Status500InternalServerError,
-						result.Code,
-						"An internal server error occurred.")
-				};
+							(int)AuthErrorCode.ConfirmResetPasswordTokenInvalid
+								or (int)AuthErrorCode.ConfirmResetPasswordTokenExpired
+								or (int)AuthErrorCode.ConfirmResetPasswordUserNotFound
+								=> (StatusCodes.Status400BadRequest,
+									(int)AuthErrorCode.ConfirmResetPasswordTokenInvalid,
+									"The password reset token is invalid or has expired."),
 
-				return StatusCode(statusCode, new ErrorResponse
-				{
-					Success = false,
-					Code = code,
-					Message = message
+							_ => (StatusCodes.Status500InternalServerError,
+								result.Code,
+								InternalErrorMessage)
+						};
+
+						return CreateErrorResult<ConfirmResetPasswordResponse>(
+							statusCode, code, message);
+					}
+
+					var response = new ConfirmResetPasswordResponse
+					{
+						Success = true,
+						Code = result.Code,
+						Message = "The password was reset successfully. Please log in again."
+					};
+
+					return (Ok(response), LogOutcome.Completed, null);
 				});
-			}
-
-			return Ok(new ConfirmResetPasswordResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "The password was reset successfully. Please log in again."
-			});
 		}
 
 		/// <summary>
 		/// 更新当前会话的最后活动时间。
 		/// </summary>
 		[HttpPost("TouchSession")]
-		public async Task<ActionResult<TouchSessionResponse>> TouchSession()
+		public Task<ActionResult<TouchSessionResponse>> TouchSession()
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !Guid.TryParse(User.FindFirst("session_id")?.Value, out var sessionId)
-				|| sessionId == Guid.Empty)
+			return ExecuteWithLoggingAsync<TouchSessionResponse>(nameof(TouchSession), async () =>
 			{
-				return Unauthorized(new ErrorResponse
+				if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
+					|| !Guid.TryParse(User.FindFirst("session_id")?.Value, out var sessionId)
+					|| sessionId == Guid.Empty)
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
-				});
-			}
-
-			var result = await _authService.TouchSession(new TouchSessionRequest
-			{
-				SessionId = sessionId
-			});
-
-			if (!result.Success)
-			{
-				if (result.Code == (int)AuthErrorCode.SessionTouchRejected)
-				{
-					return Unauthorized(new ErrorResponse
-					{
-						Success = false,
-						Code = (int)CustomerErrorCode.UnauthorizedAccess,
-						Message = "A valid session is required."
-					});
+					return CreateInvalidSessionResult<TouchSessionResponse>();
 				}
 
-				return StatusCode(
-					StatusCodes.Status500InternalServerError,
-					new ErrorResponse
-					{
-						Success = false,
-						Code = result.Code,
-						Message = "An internal server error occurred."
-					});
-			}
+				var result = await _authService.TouchSession(new TouchSessionRequest
+				{
+					SessionId = sessionId
+				});
 
-			return Ok(new TouchSessionResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "The current session was updated successfully."
+				if (!result.Success)
+				{
+					if (result.Code == (int)AuthErrorCode.SessionTouchRejected)
+					{
+						return CreateInvalidSessionResult<TouchSessionResponse>();
+					}
+
+					return CreateErrorResult<TouchSessionResponse>(
+						StatusCodes.Status500InternalServerError,
+						result.Code,
+						InternalErrorMessage);
+				}
+
+				var response = new TouchSessionResponse
+				{
+					Success = true,
+					Code = result.Code,
+					Message = "The current session was updated successfully."
+				};
+
+				return (Ok(response), LogOutcome.Completed, null);
 			});
 		}
 
@@ -602,66 +574,59 @@ namespace ServerProject.Controllers
 		/// 将当前客户的认证类型设置为 Session。
 		/// </summary>
 		[HttpPost("UpdateAuthType")]
-		public async Task<ActionResult<UpdateAuthTypeResponse>> UpdateAuthType([FromBody] UpdateAuthTypeRequest request)
+		public Task<ActionResult<UpdateAuthTypeResponse>> UpdateAuthType([FromBody] UpdateAuthTypeRequest request)
 		{
-			if (User.Identity is not { IsAuthenticated: true, AuthenticationType: "Session" }
-				|| !int.TryParse(User.FindFirst("uid")?.Value, out var customerId)
-				|| customerId <= 0)
-			{
-				return Unauthorized(new ErrorResponse
+			return ExecuteWithLoggingAsync<UpdateAuthTypeResponse>(
+				nameof(UpdateAuthType),
+				async () =>
 				{
-					Success = false,
-					Code = (int)CustomerErrorCode.UnauthorizedAccess,
-					Message = "A valid session is required."
+					if (!TryGetSessionCustomerId(out var customerId))
+					{
+						return CreateInvalidSessionResult<UpdateAuthTypeResponse>();
+					}
+
+					if (request.AuthType != AuthType.Session)
+					{
+						return CreateErrorResult<UpdateAuthTypeResponse>(
+							StatusCodes.Status400BadRequest,
+							(int)AuthErrorCode.AuthTypeInvalid,
+							SessionOnlyMessage);
+					}
+
+					request.CustomerId = customerId;
+					var result = await _authService.UpdateAuthType(request);
+
+					if (!result.Success)
+					{
+						var (statusCode, code, message) = result.Code switch
+						{
+							(int)AuthErrorCode.AuthTypeInvalid
+								=> (StatusCodes.Status400BadRequest,
+									result.Code,
+									"Invalid authentication type."),
+
+							(int)AuthErrorCode.UpdateAuthTypeUserNotFound
+								=> (StatusCodes.Status401Unauthorized,
+									(int)CustomerErrorCode.UnauthorizedAccess,
+									ValidSessionRequiredMessage),
+
+							_ => (StatusCodes.Status500InternalServerError,
+								result.Code,
+								InternalErrorMessage)
+						};
+
+						return CreateErrorResult<UpdateAuthTypeResponse>(statusCode, code, message);
+					}
+
+					var response = new UpdateAuthTypeResponse
+					{
+						Success = true,
+						Code = result.Code,
+						Message = "The account authentication type is set to Session."
+					};
+
+					return (Ok(response), LogOutcome.Completed, null);
 				});
-			}
-
-			if (request.AuthType != AuthType.Session)
-			{
-				return BadRequest(new ErrorResponse
-				{
-					Success = false,
-					Code = (int)AuthErrorCode.AuthTypeInvalid,
-					Message = "This endpoint only supports session authentication."
-				});
-			}
-
-			request.CustomerId = customerId;
-			var result = await _authService.UpdateAuthType(request);
-
-			if (!result.Success)
-			{
-				var (statusCode, code, message) = result.Code switch
-				{
-					(int)AuthErrorCode.AuthTypeInvalid
-						=> (StatusCodes.Status400BadRequest,
-							result.Code,
-							"Invalid authentication type."),
-
-					(int)AuthErrorCode.UpdateAuthTypeUserNotFound
-						=> (StatusCodes.Status401Unauthorized,
-							(int)CustomerErrorCode.UnauthorizedAccess,
-							"A valid session is required."),
-
-					_ => (StatusCodes.Status500InternalServerError,
-						result.Code,
-						"An internal server error occurred.")
-				};
-
-				return StatusCode(statusCode, new ErrorResponse
-				{
-					Success = false,
-					Code = code,
-					Message = message
-				});
-			}
-
-			return Ok(new UpdateAuthTypeResponse
-			{
-				Success = true,
-				Code = result.Code,
-				Message = "The account authentication type is set to Session."
-			});
 		}
 
 		/// <summary>
@@ -670,56 +635,138 @@ namespace ServerProject.Controllers
 		[AllowAnonymous]
 		[HttpPost("RefreshToken")]
 		[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-		public async Task<ActionResult<RefreshTokenResponse>> RefreshToken([FromBody] RefreshTokenRequest request)
+		public Task<ActionResult<RefreshTokenResponse>> RefreshToken([FromBody] RefreshTokenRequest request)
 		{
-			if (string.IsNullOrWhiteSpace(request.RefreshToken))
-			{
-				return BadRequest(new ErrorResponse
+			return ExecuteWithLoggingAsync<RefreshTokenResponse>(
+				nameof(RefreshToken),
+				async () =>
 				{
-					Success = false,
-					Code = (int)AuthErrorCode.RefreshTokenInvalid,
-					Message = "A refresh token is required."
-				});
-			}
-
-			var result = await _authService.RefreshToken(request);
-
-			if (!result.Success)
-			{
-				var (statusCode, code, message) = result.Code switch
-				{
-					(int)AuthErrorCode.RefreshTokenInvalid
-						or (int)AuthErrorCode.RefreshTokenNotFound
-						or (int)AuthErrorCode.RefreshTokenExpired
-						or (int)AuthErrorCode.RefreshTokenRevoked
-						or (int)AuthErrorCode.RefreshTokenUserNotFound
-						or (int)AuthErrorCode.RefreshTokenAuthInvalid
-						or (int)AuthErrorCode.RefreshTokenTokenVersionMismatch
-						=> (StatusCodes.Status401Unauthorized,
+					if (string.IsNullOrWhiteSpace(request.RefreshToken))
+					{
+						return CreateErrorResult<RefreshTokenResponse>(
+							StatusCodes.Status400BadRequest,
 							(int)AuthErrorCode.RefreshTokenInvalid,
-							"The refresh token is invalid or has expired."),
+							"A refresh token is required.");
+					}
 
-					_ => (StatusCodes.Status500InternalServerError,
-						result.Code,
-						"An internal server error occurred.")
-				};
+					var result = await _authService.RefreshToken(request);
 
-				return StatusCode(statusCode, new ErrorResponse
-				{
-					Success = false,
-					Code = code,
-					Message = message
+					if (!result.Success)
+					{
+						var (statusCode, code, message) = result.Code switch
+						{
+							(int)AuthErrorCode.RefreshTokenInvalid
+								or (int)AuthErrorCode.RefreshTokenNotFound
+								or (int)AuthErrorCode.RefreshTokenExpired
+								or (int)AuthErrorCode.RefreshTokenRevoked
+								or (int)AuthErrorCode.RefreshTokenUserNotFound
+								or (int)AuthErrorCode.RefreshTokenAuthInvalid
+								or (int)AuthErrorCode.RefreshTokenTokenVersionMismatch
+								=> (StatusCodes.Status401Unauthorized,
+									(int)AuthErrorCode.RefreshTokenInvalid,
+									"The refresh token is invalid or has expired."),
+
+							_ => (StatusCodes.Status500InternalServerError,
+								result.Code,
+								InternalErrorMessage)
+						};
+
+						return CreateErrorResult<RefreshTokenResponse>(statusCode, code, message);
+					}
+
+					var response = new RefreshTokenResponse
+					{
+						Success = true,
+						Code = result.Code,
+						Message = "The tokens were refreshed successfully.",
+						AccessToken = result.AccessToken,
+						RefreshToken = result.RefreshToken
+					};
+
+					return (Ok(response), LogOutcome.Completed, null);
 				});
-			}
+		}
 
-			return Ok(new RefreshTokenResponse
+		/// <summary>
+		/// 从已认证的 Session 身份中读取有效的客户 ID。
+		/// </summary>
+		private bool TryGetSessionCustomerId(out int customerId)
+		{
+			customerId = 0;
+
+			return User.Identity is { IsAuthenticated: true, AuthenticationType: "Session" }
+				&& int.TryParse(User.FindFirst("uid")?.Value, out customerId)
+				&& customerId > 0;
+		}
+
+		/// <summary>
+		/// 构造需要有效会话时的统一错误响应。
+		/// </summary>
+		private (ActionResult<TResponse> Response, LogOutcome Outcome, int? ErrorCode)
+			CreateInvalidSessionResult<TResponse>()
+		{
+			return CreateErrorResult<TResponse>(
+				StatusCodes.Status401Unauthorized,
+				(int)CustomerErrorCode.UnauthorizedAccess,
+				ValidSessionRequiredMessage);
+		}
+
+		/// <summary>
+		/// 构造错误响应，并按 HTTP 状态码确定日志结果。
+		/// </summary>
+		private (ActionResult<TResponse> Response, LogOutcome Outcome, int? ErrorCode)CreateErrorResult<TResponse>(int statusCode, int errorCode, string message)
+		{
+			var outcome = statusCode >= StatusCodes.Status500InternalServerError
+				? LogOutcome.Failed
+				: LogOutcome.Rejected;
+
+			var response = new ErrorResponse
 			{
-				Success = true,
-				Code = result.Code,
-				Message = "The tokens were refreshed successfully.",
-				AccessToken = result.AccessToken,
-				RefreshToken = result.RefreshToken
-			});
+				Success = false,
+				Code = errorCode,
+				Message = message
+			};
+
+			return (StatusCode(statusCode, response), outcome, errorCode);
+		}
+
+		/// <summary>
+		/// 执行异步 Controller 操作，记录 START、END、执行耗时和操作结果。
+		/// </summary>
+		/// <typeparam name="TResponse">操作成功时的响应类型。</typeparam>
+		/// <param name="operation">写入日志的 Action 名称。</param>
+		/// <param name="execute">返回 Action 响应、日志结果和可选错误码的异步委托。</param>
+		/// <returns>异步操作任务，其结果为委托返回的 Action 响应。</returns>
+		/// <remarks>
+		/// 如果委托抛出异常，结束日志会将结果记为 <see cref="LogOutcome.Failed"/>，
+		/// 异常继续向调用方传播。
+		/// </remarks>
+		private async Task<ActionResult<TResponse>> ExecuteWithLoggingAsync<TResponse>(
+			string operation,
+			Func<Task<(ActionResult<TResponse> Response, LogOutcome Outcome, int? ErrorCode)>> execute)
+		{
+			var stopwatch = Stopwatch.StartNew();
+			var outcome = LogOutcome.Failed;
+			int? errorCode = null;
+
+			_logger.LogStart(operation: operation);
+
+			try
+			{
+				var result = await execute();
+				outcome = result.Outcome;
+				errorCode = result.ErrorCode;
+				return result.Response;
+			}
+			finally
+			{
+				stopwatch.Stop();
+				_logger.LogEnd(
+					outcome,
+					stopwatch.ElapsedMilliseconds,
+					errorCode,
+					operation: operation);
+			}
 		}
 	}
 }
