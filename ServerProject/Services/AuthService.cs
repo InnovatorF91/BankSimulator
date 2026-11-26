@@ -89,7 +89,7 @@ namespace ServerProject.Services
 			IPasswordResetTokenRepository passwordResetTokenRepository,
 			IEmailSender emailSender,
 			ILogger<AuthService> logger)
-			: base(connectionFactory)
+			: base(connectionFactory, logger)
 		{
 			// 初始化依賴的服務實例
 			_customerRepository = customerRepository;

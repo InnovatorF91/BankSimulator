@@ -57,7 +57,7 @@ namespace ServerProject.Services
 		/// <param name="timeProvider">時間提供者實例</param>
 		/// <param name="logger">日志實例</param>
 		/// <exception cref="ArgumentNullException">参数空异常</exception>
-		public CustomerService(IConnectionFactory connectionFactory, ICustomerRepository customerRepository, ICustomerAuthRepository customerAuthRepository, ICryptoRepository cryptoRepository, ITimeProvider timeProvider, IAccountRepository accountRepository, IPasswordValidator passwordValidator, ILogger<CustomerService> logger) : base(connectionFactory)
+		public CustomerService(IConnectionFactory connectionFactory, ICustomerRepository customerRepository, ICustomerAuthRepository customerAuthRepository, ICryptoRepository cryptoRepository, ITimeProvider timeProvider, IAccountRepository accountRepository, IPasswordValidator passwordValidator, ILogger<CustomerService> logger) : base(connectionFactory, logger)
 		{
 			_customerRepository = customerRepository;
 			_customerAuthRepository = customerAuthRepository;

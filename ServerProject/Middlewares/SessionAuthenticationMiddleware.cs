@@ -9,6 +9,11 @@ namespace ServerProject.Middlewares
 	public sealed class SessionAuthenticationMiddleware
 	{
 		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<SessionAuthenticationMiddleware> _logger;
+
+		/// <summary>
 		/// 下一个请求委托
 		/// </summary>
 		private readonly RequestDelegate _next;
@@ -17,9 +22,10 @@ namespace ServerProject.Middlewares
 		/// 初始化中间件
 		/// </summary>
 		/// <param name="next">下一个请求委托</param>
-		public SessionAuthenticationMiddleware(RequestDelegate next)
+		public SessionAuthenticationMiddleware(RequestDelegate next, ILogger<SessionAuthenticationMiddleware> logger)
 		{
 			_next = next;
+			_logger = logger;
 		}
 
 		/// <summary>
@@ -50,6 +56,8 @@ namespace ServerProject.Middlewares
 			// 尝试将会话ID解析为GUID，如果失败，直接调用下一个中间件
 			if (!Guid.TryParse(sessionIdValue, out Guid sessionId))
 			{
+				_logger.LogDebug("Session authentication skipped because the session header is malformed.");
+
 				await _next(context);
 				return;
 			}
@@ -60,6 +68,8 @@ namespace ServerProject.Middlewares
 			// 如果认证失败，直接调用下一个中间件
 			if (result == null)
 			{
+				_logger.LogDebug("Session authentication did not establish an authenticated identity.");
+
 				await _next(context);
 				return;
 			}

@@ -65,7 +65,7 @@ namespace ServerProject.Services
 			ICardRepository cardRepository,
 			ICryptoRepository cryptoRepository,
 			ICardNumberGenerator cardNumberGenerator,
-			ILogger<CardService> logger) : base(connectionFactory)
+			ILogger<CardService> logger) : base(connectionFactory, logger)
 		{
 			_accountRepository = accountRepository;
 			_customerRepository = customerRepository;

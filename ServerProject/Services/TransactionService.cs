@@ -61,7 +61,7 @@ namespace ServerProject.Services
 			ICurrentCustomer currentCustomer,
 			ITimeProvider timeProvider,
 			ILogger<TransactionService> logger
-		) : base(connectionFactory)
+		) : base(connectionFactory, logger)
 		{
 			_accountRepository = accountRepository;
 			_transactionRepository = transactionRepository;

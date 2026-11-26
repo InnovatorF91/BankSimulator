@@ -30,6 +30,11 @@ namespace ServerProject.Services
 		private readonly ITimeProvider _timeProvider;
 
 		/// <summary>
+		/// 日志接口
+		/// </summary>
+		private readonly ILogger<SessionAuthenticationService> _logger;
+
+		/// <summary>
 		/// 初始化会话认证服务
 		/// </summary>
 		/// <param name="connectionFactory"> 连接工厂 </param>
@@ -40,12 +45,14 @@ namespace ServerProject.Services
 			ICustomerSessionRepository customerSessionRepository,
 			ICustomerAuthRepository customerAuthRepository,
 			ISessionOption sessionOption,
-			ITimeProvider timeProvider) : base(connectionFactory)
+			ILogger<SessionAuthenticationService> logger,
+			ITimeProvider timeProvider) : base(connectionFactory, logger)
 		{
 			_customerSessionRepository = customerSessionRepository;
 			_customerAuthRepository = customerAuthRepository;
 			_sessionOption = sessionOption;
 			_timeProvider = timeProvider;
+			_logger = logger;
 		}
 
 		/// <summary>

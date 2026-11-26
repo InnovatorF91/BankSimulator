@@ -10,10 +10,12 @@ namespace ServerProject.Common
 	public class ServiceBase
 	{
 		protected readonly IConnectionFactory _connectionFactory;
+		private readonly ILogger _rollbackLogger;
 
-		public ServiceBase(IConnectionFactory connectionFactory)
+		public ServiceBase(IConnectionFactory connectionFactory, ILogger rollbackLogger)
 		{
 			_connectionFactory = connectionFactory;
+			_rollbackLogger = rollbackLogger;
 		}
 
 		protected virtual Task<IDataAccess> CreateConnectionAsync(bool transaction = false)
@@ -78,7 +80,7 @@ namespace ServerProject.Common
 				when (ex.SqlState == PostgresErrorCodes.DeadlockDetected)
 			{
 				if (da != null)
-					TryRollback(da);
+					TryRollback(da, operationName);
 
 				throw new DbDeadlockException(
 					$"{operationName} failed due to a database deadlock.",
@@ -89,7 +91,7 @@ namespace ServerProject.Common
 			{
 				if (da != null)
 				{
-					TryRollback(da);
+					TryRollback(da, operationName);
 				}
 
 				throw new CardNumberConflictException(
@@ -103,7 +105,7 @@ namespace ServerProject.Common
 			{
 				if (da != null)
 				{
-					TryRollback(da);
+					TryRollback(da, operationName);
 				}
 
 				throw new CustomerOperationException(
@@ -113,7 +115,7 @@ namespace ServerProject.Common
 			catch (DbException ex)
 			{
 				if (da != null)
-					TryRollback(da);
+					TryRollback(da, operationName);
 
 				throw new UnableToOperateDBException(
 					$"{operationName} failed.", ex);
@@ -121,7 +123,7 @@ namespace ServerProject.Common
 			catch (TimeoutException ex)
 			{
 				if (da != null)
-					TryRollback(da);
+					TryRollback(da, operationName);
 
 				throw new UnableToOperateDBException(
 					$"{operationName} timed out.", ex);
@@ -129,7 +131,7 @@ namespace ServerProject.Common
 			catch
 			{
 				if (da != null)
-					TryRollback(da);
+					TryRollback(da, operationName);
 
 				throw;
 			}
@@ -159,7 +161,8 @@ namespace ServerProject.Common
 		/// 嘗試回滾交易，避免覆蓋原始例外
 		/// </summary>
 		/// <param name="da">IDataAccess 實例</param>
-		private static void TryRollback(IDataAccess da)
+		/// <param name="operationName">正在执行的数据库事务操作名称。</param>
+		private void TryRollback(IDataAccess da, string operationName)
 		{
 			try
 			{
@@ -168,7 +171,9 @@ namespace ServerProject.Common
 			catch
 			{
 				// 避免回滚异常覆盖原始异常。
-				// TODO: 后续统一接入日志系统。
+				_rollbackLogger.LogError(
+					"Database transaction rollback failed. Operation={Operation}",
+					operationName);
 			}
 		}
 	}
